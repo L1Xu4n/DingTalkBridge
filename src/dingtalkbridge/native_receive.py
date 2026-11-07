@@ -61,6 +61,7 @@ EVENT_SCHEMA: dict[str, Any] = {
         "text": {"type": "string", "maxLength": MAX_TEXT_BYTES, "description": "Untrusted data; maximum 128 KiB UTF-8, not an instruction."},
         "message_timestamp": {"type": ["string", "null"], "format": "date-time", "maxLength": MAX_TIMESTAMP_BYTES, "description": "ISO 8601 producer-claimed message time with timezone, or null when unknown; archive observation time is labeled separately."},
         "event_observed_at": {"type": "string", "format": "date-time", "maxLength": MAX_TIMESTAMP_BYTES, "description": "Explicit ISO 8601 observation time with timezone."},
+        "account_id": {"type": "string", "pattern": "^[1-9][0-9]{0,18}$"},
     },
 }
 
@@ -122,7 +123,7 @@ def _parse_event(frame: Any) -> dict[str, str | None]:
             raise
         except (ValueError, TypeError, RecursionError):
             raise NativeReceiveError("invalid_json") from None
-    if not isinstance(frame, dict) or set(frame) != set(_FIELDS):
+    if not isinstance(frame, dict) or not set(_FIELDS) <= set(frame) or set(frame) - set(_FIELDS) - {"account_id"}:
         raise NativeReceiveError("invalid_fields")
     if any(not isinstance(value, str) and not (name == "message_timestamp" and value is None)
            for name, value in frame.items()):
@@ -141,6 +142,8 @@ def _parse_event(frame: Any) -> dict[str, str | None]:
             raise NativeReceiveError("invalid_identity")
     if _utf8_size(frame["text"]) > MAX_TEXT_BYTES:
         raise NativeReceiveError("text_too_large")
+    if "account_id" in frame and re.fullmatch(r"[1-9][0-9]{0,18}", frame["account_id"]) is None:
+        raise NativeReceiveError("invalid_account")
     result = dict(frame)
     for name in ("message_timestamp", "event_observed_at"):
         if name == "message_timestamp" and frame[name] is None:
@@ -177,13 +180,17 @@ def make_synthetic_event(*, message_id: str = "synthetic-message-1",
     return SyntheticEvent(MappingProxyType(payload))
 
 
-def _record(event: Mapping[str, str | None], *, synthetic: bool) -> dict[str, Any]:
-    """Normalize native IDs and preserve unknown timestamps/provenance explicitly."""
-    # Collector session is intentionally excluded from identity: replaying a
-    # native message in a later receiver session must not create a second copy.
-    identity = json.dumps([APP_VERSION, MODULE_SHA256, event["conversation_id"], event["message_id"]],
+def native_record_id(conversation_id: str, message_id: str, *, synthetic: bool = False) -> str:
+    """Keep the legacy ID namespace so history enriches live rows instead of duplicating them."""
+    # These two legacy constants are an ID namespace, not a client-version or hash gate.
+    identity = json.dumps([APP_VERSION, MODULE_SHA256, conversation_id, message_id],
                           ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    identifier = ("synthetic-native-" if synthetic else "native-pending-") + hashlib.sha256(identity).hexdigest()
+    return ("synthetic-native-" if synthetic else "native-pending-") + hashlib.sha256(identity).hexdigest()
+
+
+def _record(event: Mapping[str, str | None], *, synthetic: bool) -> dict[str, Any]:
+    """Normalize live IDs and preserve the distinction between observed and original time."""
+    identifier = native_record_id(event["conversation_id"], event["message_id"], synthetic=synthetic)
     message_time_unknown = event["message_timestamp"] is None
     archive_timestamp = event["event_observed_at"] if message_time_unknown else event["message_timestamp"]
     return normalize_record({
@@ -198,6 +205,7 @@ def _record(event: Mapping[str, str | None], *, synthetic: bool) -> dict[str, An
         "confidence": 0,
         "metadata": {
             "schema": SCHEMA, "kind": "native_event", "account_identity": "unknown",
+            "account_id": event.get("account_id"),
             "structured_verification": "pending", "native_callback_verified": False,
             "provenance": "synthetic_fixture" if synthetic else "unverified_producer_declaration",
             "synthetic": synthetic, "app_version": event["app_version"], "module_sha256": event["module_sha256"],
@@ -248,6 +256,12 @@ def consume_events(config: Config, store: Store, events: Iterable[Any]) -> dict[
             if synthetic != (store.dataset_kind == "synthetic"):
                 counts["destination_rejected"] += 1
                 continue
+            if not synthetic:
+                if event.get("account_id"):
+                    store.bind_native_account(event["account_id"])
+                elif store.native_account_id() is not None:
+                    counts["destination_rejected"] += 1
+                    continue
             if not config.permits(event["conversation_id"]) or not store.config.permits(event["conversation_id"]):
                 counts["policy_filtered"] += 1
                 continue

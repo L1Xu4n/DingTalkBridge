@@ -107,6 +107,7 @@ class Store:
         return removed
 
     def ingest(self, record: Mapping[str, Any]) -> bool:
+        """Insert a normalized policy-permitted message without replacing existing rows."""
         normalized = normalize_record(record)
         if self.dataset_kind == "synthetic" and normalized["source"] != "synthetic":
             raise ValueError("synthetic demo databases cannot receive real records")
@@ -140,6 +141,51 @@ class Store:
                  normalized["confidence"], json.dumps(normalized["metadata"], ensure_ascii=False)),
             )
         return cursor.rowcount == 1
+
+    def native_account_id(self) -> str | None:
+        """Read the archive's bound native account, if a verified producer supplied one."""
+        row = self.connection.execute("SELECT value FROM bridge_metadata WHERE key='native_account_id'").fetchone()
+        return row[0] if row else None
+
+    def bind_native_account(self, account_id: str) -> None:
+        """Bind one account to this archive and reject cross-account collection."""
+        if self.dataset_kind == "synthetic" or not isinstance(account_id, str) or re.fullmatch(r"[1-9][0-9]{0,18}", account_id) is None:
+            raise ValueError("invalid native account binding")
+        with self.connection:
+            self.connection.execute("INSERT OR IGNORE INTO bridge_metadata(key,value) VALUES('native_account_id',?)", (account_id,))
+            if self.native_account_id() != account_id:
+                raise ValueError("native account changed; select a separate data directory")
+
+    def ingest_native_history(self, record: Mapping[str, Any]) -> str:
+        """Insert history or enrich the same live message with its native time, title and type."""
+        row = normalize_record(record)
+        if row["source"] != "windows_native_history" or self.dataset_kind == "synthetic":
+            raise ValueError("invalid history destination")
+        self.bind_native_account(row["metadata"].get("account_id"))
+        epoch = parse_timestamp(row["timestamp"]).timestamp()
+        if not self.config.permits(row["conversation_id"]) or epoch < self._cutoff():
+            return "skipped"
+        previous = self.connection.execute("SELECT * FROM messages WHERE id=?", (row["id"],)).fetchone()
+        if previous is None:
+            return "inserted" if self.ingest(row) else "skipped"
+        if previous["source"] not in {"windows_native_event_pending", "windows_native_history"}:
+            return "skipped"
+        old_metadata = json.loads(previous["metadata"])
+        if old_metadata.get("account_id") not in {None, row["metadata"]["account_id"]}:
+            raise ValueError("native message account mismatch")
+        fingerprint = record_fingerprint(row)
+        if previous["fingerprint"] == fingerprint and previous["conversation_title"] == row["conversation_title"] and old_metadata.get("client_fields") == row["metadata"].get("client_fields"):
+            return "skipped"
+        with self.connection:
+            self.connection.execute(
+                "UPDATE messages SET fingerprint=?,conversation_title=?,sender_id=?,sender_name=?,text=?,timestamp=?,"
+                "timestamp_epoch=?,source=?,confidence=?,metadata=? WHERE id=?",
+                (fingerprint, row["conversation_title"], row["sender_id"], row["sender_name"], row["text"], row["timestamp"],
+                 epoch, row["source"], row["confidence"], json.dumps(row["metadata"], ensure_ascii=False), row["id"]),
+            )
+            self.connection.execute("UPDATE conversations SET title=?,last_timestamp=MAX(last_timestamp,?) WHERE id=?",
+                                    (row["conversation_title"], epoch, row["conversation_id"]))
+        return "updated"
 
     def _limit(self, value: int) -> int:
         if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= self.config.max_tool_results:
@@ -188,10 +234,13 @@ class Store:
             "SELECT COUNT(*) AS messages,COUNT(DISTINCT conversation_id) AS conversations,"
             "MIN(timestamp) AS first_timestamp,MAX(timestamp) AS last_timestamp,"
             "SUM(CASE WHEN source IN (" + ",".join("?" for _ in SCREEN_CONTEXT_SOURCES)
-            + ") THEN 1 ELSE 0 END) AS screen_contexts "
+            + ") THEN 1 ELSE 0 END) AS screen_contexts,"
+            "SUM(CASE WHEN source='windows_native_history' THEN 1 ELSE 0 END) AS native_history "
             "FROM messages m WHERE " + " AND ".join(clauses), (*SCREEN_CONTEXT_SOURCES, *parameters),
         ).fetchone()
         collector = self._collector_status()
+        if row["native_history"]:
+            collector.update(history_available=True, account_identity="native_current_user", native_callback_verified=True)
         return {
             "local_only": True,
             "dataset_kind": self.dataset_kind,
@@ -200,7 +249,10 @@ class Store:
             "message_count": row["messages"] - (row["screen_contexts"] or 0),
             "record_count": row["messages"],
             "screen_context_count": row["screen_contexts"] or 0,
-            "verified_message_count": 0,
+            "verified_message_count": row["native_history"] or 0,
+            "native_history_message_count": row["native_history"] or 0,
+            "native_account_bound": self.native_account_id() is not None,
+            "history_available": bool(row["native_history"]),
             "conversation_count": row["conversations"],
             "first_timestamp": row["first_timestamp"],
             "last_timestamp": row["last_timestamp"],
@@ -281,15 +333,22 @@ class Store:
                 if isinstance(result.get(key), str) and result[key] in valid:
                     summary[key] = result[key]
             for group, keys in {
-                "native_counts": ("received", "inserted", "duplicates_or_filtered", "policy_filtered", "expired",
+                "native_counts": ("received", "inserted", "updated", "duplicates_or_filtered", "policy_filtered", "expired",
                                   "invalid", "destination_rejected", "storage_errors", "stream_errors"),
                 "native_controller_counts": ("status", "callbacks_seen", "notifications_400", "messages_seen", "messages_sent",
-                                             "dropped", "decode_errors", "pipe_failures", "identity_failures", "error"),
+                                             "dropped", "decode_errors", "pipe_failures", "identity_failures", "error",
+                                             "history_running", "history_stage", "history_conversations", "history_pages",
+                                             "history_messages", "history_errors", "history_truncated"),
             }.items():
                 counters = result.get(group)
                 if isinstance(counters, dict):
                     summary[group] = {key: value for key in keys if isinstance(value := counters.get(key), int)
                                       and not isinstance(value, bool) and 0 <= value <= 2**63 - 1}
+            stage = summary.get("native_controller_counts", {}).get("history_stage")
+            summary["history_state"] = {
+                0: "not_started", 1: "layout_unsupported", 2: "waiting_for_account", 3: "listing_conversations",
+                4: "fetching_messages", 5: "watching_changes", 6: "failed", 7: "account_changed", 8: "stopped",
+            }.get(stage, "unknown")
             session_id = result.get("collector_session_id")
             if isinstance(session_id, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,96}", session_id):
                 summary["collector_session_id"] = session_id

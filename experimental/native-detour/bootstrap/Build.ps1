@@ -18,7 +18,7 @@ if (-not $MsvcRoot) {
 if (-not $SdkVersion) {
     $SdkVersion = (Get-ChildItem -LiteralPath (Join-Path $SdkRoot 'Include') -Directory | Where-Object { $_.Name -match '^\d+\.\d+\.\d+\.\d+$' } | Sort-Object { [version]$_.Name } -Descending | Select-Object -First 1).Name
 }
-if (-not $OutputRoot) { $OutputRoot = Join-Path $PSScriptRoot 'bin\0.3.0' }
+if (-not $OutputRoot) { $OutputRoot = Join-Path $PSScriptRoot 'bin\0.4.0' }
 $OutputRoot = [IO.Path]::GetFullPath($OutputRoot)
 if ($Target -ne 'synthetic') {
     if (-not $DingTalkPath) {
@@ -66,14 +66,14 @@ constexpr wchar_t kExpectedMainFramePath[]=$(CppString $main);
 }
 "@
     [IO.File]::WriteAllText((Join-Path $out 'BuildIdentity.h'),$header,$utf8)
-    $base=@('/nologo','/utf-8','/EHsc','/std:c++17','/O2','/W4','/guard:cf','/GS','/DUNICODE','/D_UNICODE',"/DDTB_NATIVE_SYNTHETIC=$macro",('/I'+$out),('/I'+$PSScriptRoot))
+    $base=@('/nologo','/utf-8','/EHsc','/MD','/D_ITERATOR_DEBUG_LEVEL=0','/std:c++17','/O2','/W4','/guard:cf','/GS','/DUNICODE','/D_UNICODE',"/DDTB_NATIVE_SYNTHETIC=$macro",('/I'+$out),('/I'+$PSScriptRoot))
     if($synthetic){Compile ($base+@((Join-Path $PSScriptRoot 'SyntheticHost.cpp'),('/Fo'+(Join-Path $out 'Host.obj')),('/Fe'+$fixtureExe),'/link','/guard:cf','/DYNAMICBASE','/NXCOMPAT','user32.lib','advapi32.lib'))}
     Compile ($base+@((Join-Path $PSScriptRoot 'Controller.cpp'),('/Fo'+(Join-Path $out 'Controller.obj')),('/Fe'+$controller),'/link','/guard:cf','/DYNAMICBASE','/NXCOMPAT','user32.lib','advapi32.lib','bcrypt.lib'))
     $core=if($synthetic -and $SyntheticCore -eq 'stub'){Join-Path $PSScriptRoot 'SyntheticCore.cpp'}else{Join-Path $nativeRoot 'RootDetourCore.cpp'}
     if(-not(Test-Path -LiteralPath $core)){throw 'RootDetourCore.cpp unavailable; production cannot use the synthetic stub'}
     $objects=@();$sources=@((Join-Path $PSScriptRoot 'BootstrapDll.cpp'),$core)
     if($core -notlike '*SyntheticCore.cpp'){
-        $sources+=@((Join-Path $nativeRoot 'payload\payload_parser.cpp'),(Join-Path $nativeRoot 'payload\safe_read.cpp'))
+        $sources+=@((Join-Path $nativeRoot 'payload\payload_parser.cpp'),(Join-Path $nativeRoot 'payload\safe_read.cpp'),(Join-Path $nativeRoot 'history\HistoryReader.cpp'))
         foreach($name in @('buffer.c','hook.c','trampoline.c','hde\hde64.c')){$sources+=Join-Path $nativeRoot "minhook\src\$name"}
     }
     foreach($source in $sources){

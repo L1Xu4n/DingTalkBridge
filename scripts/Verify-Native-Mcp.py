@@ -19,6 +19,8 @@ def verify(marker: str) -> dict:
         {"jsonrpc": "2.0", "method": "notifications/initialized"},
         {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
             "name": "search_messages", "arguments": {"query": marker, "limit": 10}}},
+        {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "bridge_status", "arguments": {}}},
+        {"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "list_conversations", "arguments": {"limit": 100}}},
     ]
     response = subprocess.run(
         [sys.executable, "-m", "dingtalkbridge", "--config", str(root / "config.local.json"), "serve"],
@@ -33,9 +35,11 @@ def verify(marker: str) -> dict:
     result = reply.get("result", {})
     rows = result.get("structuredContent", {}).get("messages", [])
     matches = [row for row in rows if row["text"] == marker
-               and row["source"] == "windows_native_event_pending"]
+               and row["source"] in {"windows_native_event_pending", "windows_native_history"}]
     row = matches[0] if matches else {}
     metadata = row.get("metadata", {})
+    status = next(item for item in replies if item.get("id") == 3)["result"]["structuredContent"]
+    conversations = next(item for item in replies if item.get("id") == 4)["result"]["structuredContent"]
     return {
         "schema": "dingtalkbridge.native-live-verification.v1",
         "mcp_initialized": replies[0].get("result", {}).get("serverInfo", {}).get("name") == "DingTalkBridge",
@@ -46,8 +50,12 @@ def verify(marker: str) -> dict:
         "native_message_id_present": bool(metadata.get("native_message_id")),
         "collector_session_id": metadata.get("collector_session_id"),
         "timestamp_kind": metadata.get("timestamp_kind"),
-        "current_account_identity_verified": False,
-        "history_verified": False,
+        "current_account_identity_verified": metadata.get("account_identity") == "native_current_user",
+        "history_sample_verified": row.get("source") == "windows_native_history",
+        "record_count": status["record_count"],
+        "history_message_count": status.get("native_history_message_count", 0),
+        "indexed_conversation_count": status["conversation_count"],
+        "conversations_returned": len(conversations["conversations"]),
     }
 
 

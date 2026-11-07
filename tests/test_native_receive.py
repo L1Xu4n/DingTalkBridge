@@ -52,7 +52,7 @@ class NativeReceiveTests(unittest.TestCase):
         expected = {"schema", "app_version", "module_sha256", "collector_session_id", "message_id",
                     "conversation_id", "sender_id", "text", "message_timestamp", "event_observed_at"}
         self.assertEqual(set(EVENT_SCHEMA["required"]), expected)
-        self.assertEqual(set(EVENT_SCHEMA["properties"]), expected)
+        self.assertEqual(set(EVENT_SCHEMA["properties"]), expected | {"account_id"})
         self.assertFalse(EVENT_SCHEMA["additionalProperties"])
         self.assertEqual(EVENT_SCHEMA["properties"]["schema"]["const"], SCHEMA)
         self.assertNotIn("const", EVENT_SCHEMA["properties"]["app_version"])

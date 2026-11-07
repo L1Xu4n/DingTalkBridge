@@ -28,6 +28,8 @@
 
 其它函数见 [FUNCTIONS_NATIVE.md](FUNCTIONS_NATIVE.md)。公开验证范围见 [NATIVE_LIVE_VERIFICATION.md](NATIVE_LIVE_VERIFICATION.md)。
 
+已有会话的补采配置、边界与新增函数见 [HISTORY.md](HISTORY.md)。
+
 ## MCP 自动采集
 
 `serve` 默认自动启动采集，不需要修改已有 MCP 配置；`serve --no-collector` 只查询归档。多个 MCP 客户端共用后台采集器，退出一个客户端不会主动停止共享采集，手动停止仍用 `Stop-Native.ps1`。

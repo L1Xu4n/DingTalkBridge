@@ -42,13 +42,15 @@ QUEUE_CAPACITY = 16
 MAX_COUNTER = 2**63 - 1
 IS_WINDOWS = os.name == "nt"
 _RECEIVE_COUNTERS = (
-    "received", "inserted", "duplicates_or_filtered", "policy_filtered", "expired",
+    "received", "inserted", "updated", "duplicates_or_filtered", "policy_filtered", "expired",
     "invalid", "destination_rejected", "storage_errors", "stream_errors",
 )
 _CONTROLLER_COUNTERS = (
     "bootstrap_invocations", "callbacks_seen", "notifications_400", "messages_seen",
     "messages_enqueued", "messages_sent", "dropped", "decode_errors", "policy_rejections",
     "controller_lost", "pipe_failures", "identity_failures",
+    "history_running", "history_stage", "history_conversations", "history_pages", "history_messages",
+    "history_errors", "history_truncated",
 )
 
 
@@ -75,7 +77,7 @@ def default_controller_path(*, synthetic: bool = False) -> Path:
     """Resolve the matching production or synthetic Controller executable."""
     flavor = "synthetic" if synthetic else "production"
     executable = "BridgeControllerSynthetic.exe" if synthetic else "BridgeController.exe"
-    return Path(__file__).resolve().parents[2] / "experimental" / "native-detour" / "bootstrap" / "bin" / "0.3.0" / flavor / executable
+    return Path(__file__).resolve().parents[2] / "experimental" / "native-detour" / "bootstrap" / "bin" / "0.4.0" / flavor / executable
 
 
 def _sha256(path: Path) -> str:
@@ -308,6 +310,13 @@ def _write_status(config: Config, summary: dict[str, Any]) -> None:
 
 def _consume_frame(config: Config, store: Store, frame: dict[str, Any], *, synthetic: bool, session: str) -> dict[str, int]:
     """Check session and real/synthetic provenance before writing a message."""
+    if not synthetic:
+        from .native_history import SCHEMA as HISTORY_SCHEMA, consume_history
+        if frame.get("schema") == HISTORY_SCHEMA:
+            try:
+                return consume_history(config, store, frame, session)
+            except ValueError:
+                raise _fail("history_record_rejected") from None
     if synthetic:
         if set(frame) != {"schema", "event"} or frame.get("schema") != SYNTHETIC_ENVELOPE or not isinstance(frame.get("event"), dict):
             raise _fail("synthetic_envelope_required")
@@ -359,7 +368,11 @@ def run_collect(config: Config, store: Store, args: Any = None) -> dict[str, Any
     if not _option(args, "preserve_stop_request", False):
         stop_path.unlink(missing_ok=True)
     command = [str(path), "--pid", str(pid), "--hwnd", str(hwnd), "--duration", str(duration),
-               "--session", session, "--mode", mode]
+               "--session", session, "--mode", mode,
+               "--history-days", str(config.retention_days),
+               "--history-conversations", str(config.history_max_conversations),
+               "--history-messages", str(config.history_messages_per_conversation),
+               "--history-interval", str(config.history_interval_seconds)]
     if mode == "capture":
         command.append("--stream")
     summary: dict[str, Any] = {

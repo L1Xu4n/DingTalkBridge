@@ -22,8 +22,12 @@ class Config:
     excluded_conversations: tuple[str, ...] = ()
     retention_days: int = 30
     max_tool_results: int = 200
+    history_max_conversations: int = 500
+    history_messages_per_conversation: int = 1000
+    history_interval_seconds: int = 30
 
     def __post_init__(self) -> None:
+        """Normalize local paths and validate archive and history-query bounds."""
         object.__setattr__(self, "data_dir", Path(os.path.expandvars(str(self.data_dir))).expanduser())
         if self.db_path is not None:
             object.__setattr__(self, "db_path", Path(os.path.expandvars(str(self.db_path))).expanduser())
@@ -32,10 +36,14 @@ class Config:
             if not isinstance(value, (list, tuple)) or not all(isinstance(item, str) and item for item in value):
                 raise ValueError(f"{name} must be a list of nonempty strings")
             object.__setattr__(self, name, tuple(dict.fromkeys(value)))
-        for name, maximum in (("retention_days", 36500), ("max_tool_results", 200)):
+        for name, maximum in (("retention_days", 36500), ("max_tool_results", 200),
+                              ("history_max_conversations", 5000), ("history_messages_per_conversation", 10000),
+                              ("history_interval_seconds", 3600)):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= maximum:
                 raise ValueError(f"{name} must be an integer between 1 and {maximum}")
+        if self.history_interval_seconds < 5:
+            raise ValueError("history_interval_seconds must be at least 5")
 
     @property
     def database_path(self) -> Path:
@@ -80,7 +88,8 @@ def load_config(path: str | Path | None = None) -> Config:
         raise ValueError("selected settings file could not be read") from exc
     if not isinstance(values, Mapping):
         raise ValueError("settings must be a JSON object")
-    allowed = {"data_dir", "db_path", "allowed_conversations", "excluded_conversations", "retention_days", "max_tool_results"}
+    allowed = {"data_dir", "db_path", "allowed_conversations", "excluded_conversations", "retention_days", "max_tool_results",
+               "history_max_conversations", "history_messages_per_conversation", "history_interval_seconds"}
     if set(values) - allowed:
         raise ValueError("settings contain unsupported fields: " + ", ".join(sorted(set(values) - allowed)))
     for key in ("data_dir", "db_path"):

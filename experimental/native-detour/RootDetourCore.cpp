@@ -5,6 +5,7 @@
 #include "BuildIdentity.h"
 #include "payload/payload_parser.h"
 #include "payload/safe_read.h"
+#include "history/HistoryReader.h"
 #include "minhook/include/MinHook.h"
 #include <bcrypt.h>
 #include <atomic>
@@ -42,12 +43,13 @@ struct Handle {
     Handle(const Handle&) = delete;
     Handle& operator=(const Handle&) = delete;
 };
-struct QueuedMessage { payload::ParsedMessage message; std::string observed_at; std::size_t bytes = 0; };
+struct QueuedMessage { payload::ParsedMessage message; std::string observed_at; std::size_t bytes = 0; std::string raw_frame; };
 struct Session {
     BootstrapRequest request{}; // An immutable copy, never a borrowed request reference.
     SharedState* shared = nullptr; // Bootstrap retains this mapping for process lifetime.
     HANDLE controller = nullptr; // Retained for the same lifetime: no stale handle reuse.
     std::atomic<bool> enabled{false};
+    std::atomic<std::int64_t> account_uid{0};
     std::mutex queue_mutex;
     std::deque<QueuedMessage> queue;
     std::size_t queue_bytes = 0;
@@ -155,6 +157,56 @@ bool Live(Session* session) {
     }
     return true;
 }
+// Bind capture to the initialized account and stop before accepting another account's data.
+bool AccountValid(Session* session) noexcept {
+#if defined(DTB_NATIVE_SYNTHETIC) && DTB_NATIVE_SYNTHETIC
+    return Live(session);
+#else
+    std::int64_t current=0;
+    if(!Live(session)||!history::ReadAccountUid(g_message_base.load(),current))return false;
+    std::int64_t expected=0;
+    session->account_uid.compare_exchange_strong(expected,current);
+    if(session->account_uid.load()!=current) {
+        session->enabled.store(false);InterlockedExchange(&session->shared->Active,0);
+        Increment(&session->shared->policy_rejections);Error(session->shared,BootstrapError::Identity);
+        return false;
+    }
+    return true;
+#endif
+}
+
+// Expose the session stop condition to the history worker without giving it controller ownership.
+bool HistoryActive(void* opaque) noexcept { return Live(static_cast<Session*>(opaque)); }
+
+// Apply backpressure on the private history thread, never on a product notification callback.
+bool QueueHistory(void* opaque,const std::string& frame) noexcept {
+    auto* session=static_cast<Session*>(opaque);
+    if(frame.size()>kMaximumFrame)return false;
+    const auto deadline=GetTickCount64()+5000;
+    try {
+        while(AccountValid(session) && GetTickCount64()<deadline) {
+            { std::lock_guard<std::mutex> lock(session->queue_mutex);
+              if(session->queue.size()<kMaximumQueueMessages && frame.size()<=kMaximumQueueBytes-session->queue_bytes) {
+                  QueuedMessage row;row.bytes=frame.size();row.raw_frame=frame;
+                  session->queue_bytes+=row.bytes;session->queue.push_back(std::move(row));
+                  Increment(&session->shared->messages_enqueued);return true;
+              } }
+            Sleep(10);
+        }
+    } catch(...) {}
+    return false;
+}
+
+// Run native history queries separately from both window dispatch and pipe output.
+DWORD WINAPI HistoryWorker(void* opaque) noexcept {
+    auto* session=static_cast<Session*>(opaque);
+    history::Run(g_message_base.load(),session->request,session->shared,session,HistoryActive,QueueHistory);
+    if(Read(&session->shared->history_stage)==7) {
+        session->enabled.store(false);InterlockedExchange(&session->shared->Active,0);
+        Error(session->shared,BootstrapError::Identity);
+    }
+    return 0;
+}
 // 生成 UTC 观察时间，不冒充消息发送时间。
 std::string Stamp() {
     SYSTEMTIME t{}; GetSystemTime(&t); char output[40]{};
@@ -178,7 +230,7 @@ void Queue(void* opaque,payload::ParsedMessage&& message) noexcept {
 }
 // 在同步通知生命周期内解析事件，防止重入采集。
 void Capture(Session* session,std::int32_t event_type,const void* detail) noexcept {
-    if (g_in_capture || !Live(session) || session->request.mode!=CaptureMode::CaptureMessages) return;
+    if (g_in_capture || !AccountValid(session) || session->request.mode!=CaptureMode::CaptureMessages) return;
     g_in_capture=true;
     const auto result=payload::parse_on_notification(event_type,detail,g_message_base.load(),session,Queue);
     InterlockedAdd64(&session->shared->messages_seen,result.nodes_visited);
@@ -209,6 +261,7 @@ void JsonString(std::string& output,const std::string& input) {
 }
 // 把消息副本编码成一行本地管道协议。
 std::string Frame(const Session& session,const QueuedMessage& row) {
+    if(!row.raw_frame.empty())return row.raw_frame;
     std::string result; result.reserve(row.bytes+512);
     result="{\"schema\":\"dingtalkbridge.native-receive.v1\",\"app_version\":";
     JsonString(result,g_client_version);
@@ -218,6 +271,7 @@ std::string Frame(const Session& session,const QueuedMessage& row) {
     result+=",\"conversation_id\":"; JsonString(result,row.message.conversation_id);
     result+=",\"sender_id\":"; JsonString(result,row.message.sender_id);
     result+=",\"text\":"; JsonString(result,row.message.text);
+    if(session.account_uid.load()>0) {result+=",\"account_id\":";JsonString(result,std::to_string(session.account_uid.load()));}
     result+=",\"message_timestamp\":null,\"event_observed_at\":"; JsonString(result,row.observed_at); result+="}";
 #if defined(DTB_NATIVE_SYNTHETIC) && DTB_NATIVE_SYNTHETIC
     // A fixture can never silently impersonate a production stream.
@@ -261,6 +315,11 @@ DWORD WINAPI Worker(void* opaque) noexcept {
         if (session->request.mode==CaptureMode::CaptureMessages) {
             pipe.value=ConnectVerifiedControllerPipe(session->request);
             if (!pipe.value || pipe.value==INVALID_HANDLE_VALUE) throw 1;
+#if !defined(DTB_NATIVE_SYNTHETIC) || !DTB_NATIVE_SYNTHETIC
+            HANDLE history_thread=CreateThread(nullptr,0,HistoryWorker,session,0,nullptr);
+            if(history_thread)CloseHandle(history_thread);
+            else {InterlockedExchange(&session->shared->history_stage,6);Increment(&session->shared->history_errors);}
+#endif
         }
         while (Live(session)) {
             QueuedMessage row; bool found=false;
@@ -298,6 +357,10 @@ bool InitializeReadOnlyDetour(const BootstrapRequest& claims,SharedState* shared
         if (request.magic!=kProtocolMagic || request.version!=kProtocolVersion || request.bytes!=sizeof(request) ||
             !SessionId(request) || (request.mode!=CaptureMode::CountOnly && request.mode!=CaptureMode::CaptureMessages)) {
             Error(shared,BootstrapError::Protocol); return false;
+        }
+        if(!request.history_days||request.history_days>36500||!request.history_max_conversations||request.history_max_conversations>5000||
+           !request.history_max_messages||request.history_max_messages>10000||request.history_interval_seconds<5||request.history_interval_seconds>3600) {
+            Error(shared,BootstrapError::Protocol);return false;
         }
         if (g_install_state<0 || g_session_count>=g_sessions.size()) { Error(shared,BootstrapError::Initialize); return false; }
         auto* old=g_current.load(std::memory_order_acquire);

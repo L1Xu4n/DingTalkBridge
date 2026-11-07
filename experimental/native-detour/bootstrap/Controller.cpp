@@ -40,7 +40,11 @@ void Summary(const SharedState* s,bool stream,const char* event) {
        <<",\"callbacks_seen\":"<<s->callbacks_seen<<",\"notifications_400\":"<<s->notifications_400
        <<",\"messages_seen\":"<<s->messages_seen<<",\"messages_sent\":"<<s->messages_sent
        <<",\"dropped\":"<<s->dropped<<",\"controller_lost\":"<<s->controller_lost
-       <<",\"pipe_failures\":"<<s->pipe_failures<<",\"identity_failures\":"<<s->identity_failures<<"}"<<std::endl;
+       <<",\"pipe_failures\":"<<s->pipe_failures<<",\"identity_failures\":"<<s->identity_failures
+       <<",\"decode_errors\":"<<s->decode_errors<<",\"history_running\":"<<s->history_running
+       <<",\"history_stage\":"<<s->history_stage<<",\"history_conversations\":"<<s->history_conversations
+       <<",\"history_pages\":"<<s->history_pages<<",\"history_messages\":"<<s->history_messages
+       <<",\"history_errors\":"<<s->history_errors<<",\"history_truncated\":"<<s->history_truncated<<"}"<<std::endl;
 }
 // 输出固定错误原因并返回失败码。
 int Fail(const char* reason){std::cerr<<"{\"error\":\""<<reason<<"\"}"<<std::endl;return 1;}
@@ -56,6 +60,7 @@ int Run(int argc,wchar_t** argv) {
 #endif
     DWORD pid=0;HWND hwnd=nullptr;double duration=10;bool stream=false;CaptureMode mode=CaptureMode::CountOnly;
     std::string session="count_only";
+    std::uint64_t history_days=30,history_conversations=500,history_messages=1000,history_interval=30;
 #if BRIDGE_SYNTHETIC
     bool fixture_bad_start=false;
 #endif
@@ -64,6 +69,10 @@ int Run(int argc,wchar_t** argv) {
         else if(a==L"--hwnd"&&i+1<argc)hwnd=reinterpret_cast<HWND>(Number(argv[++i]));
         else if(a==L"--duration"&&i+1<argc){wchar_t* end=nullptr;duration=wcstod(argv[++i],&end);if(!end||*end)return Fail("invalid_duration");}
         else if(a==L"--session"&&i+1<argc){std::wstring value=argv[++i];if(std::any_of(value.begin(),value.end(),[](wchar_t c){return c>127;}))return Fail("invalid_session");session.clear();for(auto c:value)session.push_back(static_cast<char>(c));}
+        else if(a==L"--history-days"&&i+1<argc)history_days=Number(argv[++i]);
+        else if(a==L"--history-conversations"&&i+1<argc)history_conversations=Number(argv[++i]);
+        else if(a==L"--history-messages"&&i+1<argc)history_messages=Number(argv[++i]);
+        else if(a==L"--history-interval"&&i+1<argc)history_interval=Number(argv[++i]);
 #if BRIDGE_SYNTHETIC
         else if(a==L"--fixture-bad-target-start")fixture_bad_start=true;
 #endif
@@ -73,6 +82,8 @@ int Run(int argc,wchar_t** argv) {
     }
     if(!pid||!hwnd||!(duration>=0&&duration<=3600)||session.size()>95||!SafeSessionId(session.c_str(),session.size()+1)||
        ((mode==CaptureMode::CaptureMessages)!=stream))return Fail("invalid_configuration");
+    if(!history_days||history_days>36500||!history_conversations||history_conversations>5000||
+       !history_messages||history_messages>10000||history_interval<5||history_interval>3600)return Fail("invalid_history_bounds");
     // No stdout body output is permitted to an interactive console or file. Stream
     // is designed for the Python parent owning a private anonymous stdout pipe.
     if(stream&&GetFileType(GetStdHandle(STD_OUTPUT_HANDLE))!=FILE_TYPE_PIPE)return Fail("stream_requires_parent_pipe");
@@ -86,6 +97,8 @@ int Run(int argc,wchar_t** argv) {
     if(!IsWindowVisible(hwnd))return Fail("target_window_not_visible");
 #endif
     BootstrapRequest r{};r.magic=kProtocolMagic;r.version=kProtocolVersion;r.bytes=sizeof(r);r.build_flavor=kBuildFlavor;r.mode=mode;
+    r.history_days=static_cast<std::uint32_t>(history_days);r.history_max_conversations=static_cast<std::uint32_t>(history_conversations);
+    r.history_max_messages=static_cast<std::uint32_t>(history_messages);r.history_interval_seconds=static_cast<std::uint32_t>(history_interval);
     r.controller_pid=self.pid;r.target_pid=target.pid;r.target_thread_id=tid;r.controller_session_id=self.session;r.target_session_id=target.session;
     r.controller_integrity_rid=self.integrity;r.target_integrity_rid=target.integrity;r.controller_creation_time=self.creation;r.target_creation_time=target.creation;r.target_hwnd=std::uint64_t(hwnd);
     if(BCryptGenRandom(nullptr,r.nonce,sizeof(r.nonce),BCRYPT_USE_SYSTEM_PREFERRED_RNG)<0)return Fail("random_nonce");
@@ -160,10 +173,10 @@ int Run(int argc,wchar_t** argv) {
     InterlockedExchange(&x.state->requested_active,0);
     if(!active_announced&&x.state->status==LONG(BootstrapStatus::Ready)){InterlockedExchange(&x.state->status,LONG(BootstrapStatus::Failed));InterlockedExchange(&x.state->last_error,LONG(BootstrapError::Timeout));}
     auto stop=std::chrono::steady_clock::now();
-    while(x.state->worker_alive&&std::chrono::duration<double>(std::chrono::steady_clock::now()-stop).count()<2)Sleep(20);
+    while((x.state->worker_alive||x.state->history_running)&&std::chrono::duration<double>(std::chrono::steady_clock::now()-stop).count()<3)Sleep(20);
     if(x.hook){BOOL removed=UnhookWindowsHookEx(x.hook);x.hook=nullptr;if(!removed)InterlockedExchange(&x.state->last_error,LONG(BootstrapError::Target));}
     Summary(x.state,stream,"stopped");
-    return active_announced&&x.state->Active==0&&x.state->worker_alive==0&&x.state->last_error==0?0:1;
+    return active_announced&&x.state->Active==0&&x.state->worker_alive==0&&x.state->history_running==0&&x.state->last_error==0?0:1;
 }
 }
 // 程序入口，将未处理异常转为固定失败原因。

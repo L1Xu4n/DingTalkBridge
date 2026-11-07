@@ -13,7 +13,7 @@ import time
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parent
-BIN = ROOT / "bin" / "0.3.0" / "synthetic"
+BIN = ROOT / "bin" / "0.4.0" / "synthetic"
 HOST = BIN / "DingTalkBridgeNativeSyntheticHost.exe"
 CONTROLLER = BIN / "BridgeControllerSynthetic.exe"
 

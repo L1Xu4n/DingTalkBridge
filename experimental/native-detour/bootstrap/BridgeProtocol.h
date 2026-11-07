@@ -8,7 +8,7 @@
 
 namespace bridge_native {
 constexpr std::uint32_t kProtocolMagic = 0x424E4454; // TDNB
-constexpr std::uint32_t kProtocolVersion = 1;
+constexpr std::uint32_t kProtocolVersion = 2;
 constexpr wchar_t kBootstrapMessage[] = L"DingTalkBridge.NativeBootstrap.v1";
 enum class CaptureMode : std::uint32_t { CountOnly = 1, CaptureMessages = 2 };
 enum class BootstrapStatus : LONG { Empty = 0, Ready = 1, Validating = 2, Initializing = 3,
@@ -35,7 +35,11 @@ struct BootstrapRequest {
     std::uint64_t target_creation_time;
     std::uint64_t target_hwnd;
     BYTE nonce[16];
-    BYTE reserved_profile_bytes[32]; // Kept for wire layout; no client hash verification.
+    std::uint32_t history_days;
+    std::uint32_t history_max_conversations;
+    std::uint32_t history_max_messages;
+    std::uint32_t history_interval_seconds;
+    BYTE reserved_profile_bytes[16]; // No client hash verification.
     char collector_session_id[96]; // ASCII [A-Za-z0-9_-], NUL terminated
     wchar_t controller_image_path[512];
     wchar_t target_image_path[512];
@@ -72,6 +76,13 @@ struct alignas(8) SharedState {
     volatile LONG64 controller_lost;
     volatile LONG64 pipe_failures;
     volatile LONG64 identity_failures;
+    volatile LONG history_running;
+    volatile LONG history_stage; // 1 incompatible, 2 waiting, 3 listing, 4 paging, 5 idle, 6 error, 7 account changed, 8 stopped.
+    volatile LONG64 history_conversations;
+    volatile LONG64 history_pages;
+    volatile LONG64 history_messages;
+    volatile LONG64 history_errors;
+    volatile LONG64 history_truncated;
     BootstrapRequest request;
 };
 static_assert(std::is_standard_layout<BootstrapRequest>::value, "wire request layout");
