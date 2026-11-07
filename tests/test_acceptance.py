@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class AcceptanceTests(unittest.TestCase):
     def test_cli_import_and_mcp_queries_round_trip(self):
+        """Verify imported synthetic records over MCP without starting native collection."""
         with tempfile.TemporaryDirectory(prefix='dingtalkbridge-acceptance-') as tmp:
             folder = Path(tmp)
             config_path = folder / 'config.json'
@@ -44,7 +45,7 @@ class AcceptanceTests(unittest.TestCase):
                 {'jsonrpc': '2.0', 'id': 8, 'method': 'tools/call', 'params': {'name': 'search_messages', 'arguments': {'query': "' OR 1=1 --", 'limit': 10}}},
             ]
             payload = ''.join(json.dumps(x, ensure_ascii=False)+'\n' for x in requests)
-            served = subprocess.run([sys.executable, '-m', 'dingtalkbridge', '--config', str(config_path), 'serve'],
+            served = subprocess.run([sys.executable, '-m', 'dingtalkbridge', '--config', str(config_path), 'serve', '--no-collector'],
                                     cwd=ROOT, env=env, input=payload, capture_output=True, encoding='utf-8', timeout=20)
             self.assertEqual(served.returncode, 0, served.stderr)
             lines = [json.loads(line) for line in served.stdout.splitlines()]
@@ -57,6 +58,7 @@ class AcceptanceTests(unittest.TestCase):
             self.assertEqual({x['name'] for x in tools}, {'bridge_status', 'list_conversations', 'get_messages', 'search_messages', 'get_context', 'poll_events'})
             self.assertTrue(all(x['annotations']['readOnlyHint'] for x in tools))
             def value(n):
+                """Decode one successful MCP tool result from the acceptance session."""
                 result = responses[n]['result']
                 self.assertFalse(result.get('isError', False), result)
                 return result.get('structuredContent') or json.loads(result['content'][0]['text'])

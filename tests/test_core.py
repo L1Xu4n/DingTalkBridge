@@ -559,11 +559,12 @@ class CoreTest(unittest.TestCase):
         self.assertEqual(len(server.call_tool("get_messages", {})["structuredContent"]["messages"]), 1)
 
     def test_real_cli_subprocess_stdio_has_no_banner_or_stderr(self):
+        """Check the archive-only MCP protocol without launching a real collector."""
         frames = "\n".join(json.dumps(frame) for frame in (
             self.request("initialize", {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "test", "version": "1"}}, 1),
             {"jsonrpc": "2.0", "method": "notifications/initialized"},
             self.request("tools/call", {"name": "bridge_status", "arguments": {}}, 2))) + "\n"
-        process = subprocess.run([sys.executable, "-m", "dingtalkbridge", "--db", str(self.directory / "cli.sqlite3"), "serve"],
+        process = subprocess.run([sys.executable, "-m", "dingtalkbridge", "--db", str(self.directory / "cli.sqlite3"), "serve", "--no-collector"],
                                  input=frames, text=True, encoding="utf-8", capture_output=True, timeout=10)
         self.assertEqual(process.returncode, 0, process.stderr)
         self.assertEqual(process.stderr, "")

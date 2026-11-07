@@ -42,5 +42,6 @@
 | `native_controller._acquire_lock` | 分别管理采集锁和自动启动锁，阻止并发重复实例。 |
 | `native_controller.run_collect` | 自动启动路径保留已有停止请求，避免停止与启动竞争。 |
 | `cli.parser` / `cli.main` | 添加只读归档选项，并在 MCP 启动时调用自动采集入口。 |
+| `Store._collector_status` | 向 MCP 状态展示采集器正在等待钉钉窗口的状态。 |
 
 `tests/test_native_autostart.py` 分别检查复用、配置与管道隔离、等待后启动、等待时停止、默认/禁用路径及启动失败后的 MCP 可用性。
