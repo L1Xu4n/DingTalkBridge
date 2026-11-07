@@ -481,6 +481,7 @@ class CoreTest(unittest.TestCase):
                 self.assertNotIn(private_content, str(context.exception))
 
     def test_cli_environment_config_selects_the_same_explicit_database(self):
+        """Compare resolved paths so Windows 8.3 aliases identify the same selected database."""
         settings_path = self.directory / "local.json"
         data_dir = self.directory / "pinned-data"
         settings_path.write_text(json.dumps({"data_dir": str(data_dir)}), encoding="utf-8")
@@ -488,7 +489,7 @@ class CoreTest(unittest.TestCase):
         process = subprocess.run([sys.executable, "-m", "dingtalkbridge", "status"],
                                  text=True, encoding="utf-8", capture_output=True, timeout=10, env=environment)
         self.assertEqual(process.returncode, 0, process.stderr)
-        self.assertEqual(Path(json.loads(process.stdout)["database_path"]), data_dir / "messages.sqlite3")
+        self.assertEqual(Path(json.loads(process.stdout)["database_path"]).resolve(), (data_dir / "messages.sqlite3").resolve())
         environment["DINGTALKBRIDGE_CONFIG"] = str(self.directory / "missing.json")
         process = subprocess.run([sys.executable, "-m", "dingtalkbridge", "status"],
                                  text=True, encoding="utf-8", capture_output=True, timeout=10, env=environment)

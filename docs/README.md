@@ -24,5 +24,6 @@
 | `native_target.discover_targets` | 按本机构建目标筛选窗口，采集前仍由 Controller 独立核验完整身份。 |
 | `scripts/Write-McpConfig.ps1` | 生成含本机 Python、源码及数据配置路径的 MCP JSON。 |
 | `bootstrap/Build.ps1` | 自动找到编译器/SDK/钉钉，生成只属于本次构建的路径绑定。 |
+| `test_cli_environment_config_selects_the_same_explicit_database` | 验证环境变量选择的数据库路径一致，并兼容 Windows 8.3 短路径别名。 |
 
 其它函数见 [FUNCTIONS_NATIVE.md](FUNCTIONS_NATIVE.md)。公开验证范围见 [NATIVE_LIVE_VERIFICATION.md](NATIVE_LIVE_VERIFICATION.md)。
