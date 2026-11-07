@@ -89,7 +89,7 @@ class AutostartTests(unittest.TestCase):
 
     def test_serve_starts_by_default_and_supports_archive_only(self):
         """Existing serve configurations autostart; explicit archive-only usage does not."""
-        for arguments, expected in ((["serve"], 1), (["serve", "--no-collector"], 0)):
+        for arguments, expected in ((["serve"], 1), (["serve", "--no-collector"], 0), (["--demo-data", "serve"], 0)):
             with patch("dingtalkbridge.cli.load_config", return_value=self.config), \
                  patch.object(autostart, "ensure_collector") as ensure, \
                  patch("sys.stdin", io.StringIO()), patch("sys.stdout", io.StringIO()):

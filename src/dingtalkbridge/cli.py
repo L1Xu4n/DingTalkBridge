@@ -131,7 +131,7 @@ def main(argv: list[str] | None = None) -> int:
             if arguments.command == "status":
                 _print(store.status())
             elif arguments.command == "serve":
-                if not arguments.no_collector and store.dataset_kind != "synthetic":
+                if not arguments.no_collector and not arguments.demo_data and store.dataset_kind != "synthetic":
                     from .autostart import ensure_collector
                     try:
                         ensure_collector(config)
