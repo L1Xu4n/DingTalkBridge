@@ -18,7 +18,7 @@ if (-not $MsvcRoot) {
 if (-not $SdkVersion) {
     $SdkVersion = (Get-ChildItem -LiteralPath (Join-Path $SdkRoot 'Include') -Directory | Where-Object { $_.Name -match '^\d+\.\d+\.\d+\.\d+$' } | Sort-Object { [version]$_.Name } -Descending | Select-Object -First 1).Name
 }
-if (-not $OutputRoot) { $OutputRoot = Join-Path $PSScriptRoot 'bin\0.4.0' }
+if (-not $OutputRoot) { $OutputRoot = Join-Path $PSScriptRoot 'bin\0.6.1' }
 $OutputRoot = [IO.Path]::GetFullPath($OutputRoot)
 if ($Target -ne 'synthetic') {
     if (-not $DingTalkPath) {

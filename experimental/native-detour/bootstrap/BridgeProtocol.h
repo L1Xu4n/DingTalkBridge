@@ -8,7 +8,7 @@
 
 namespace bridge_native {
 constexpr std::uint32_t kProtocolMagic = 0x424E4454; // TDNB
-constexpr std::uint32_t kProtocolVersion = 2;
+constexpr std::uint32_t kProtocolVersion = 4;
 constexpr wchar_t kBootstrapMessage[] = L"DingTalkBridge.NativeBootstrap.v1";
 enum class CaptureMode : std::uint32_t { CountOnly = 1, CaptureMessages = 2 };
 enum class BootstrapStatus : LONG { Empty = 0, Ready = 1, Validating = 2, Initializing = 3,
@@ -35,10 +35,9 @@ struct BootstrapRequest {
     std::uint64_t target_creation_time;
     std::uint64_t target_hwnd;
     BYTE nonce[16];
-    std::uint32_t history_days;
-    std::uint32_t history_max_conversations;
-    std::uint32_t history_max_messages;
+    std::uint32_t reserved_history_limits[3]; // Retired; no age or total-count limits.
     std::uint32_t history_interval_seconds;
+    wchar_t attachment_request_directory[512]; // Current-user download requests, never credentials.
     BYTE reserved_profile_bytes[16]; // No client hash verification.
     char collector_session_id[96]; // ASCII [A-Za-z0-9_-], NUL terminated
     wchar_t controller_image_path[512];

@@ -358,8 +358,7 @@ bool InitializeReadOnlyDetour(const BootstrapRequest& claims,SharedState* shared
             !SessionId(request) || (request.mode!=CaptureMode::CountOnly && request.mode!=CaptureMode::CaptureMessages)) {
             Error(shared,BootstrapError::Protocol); return false;
         }
-        if(!request.history_days||request.history_days>36500||!request.history_max_conversations||request.history_max_conversations>5000||
-           !request.history_max_messages||request.history_max_messages>10000||request.history_interval_seconds<5||request.history_interval_seconds>3600) {
+        if(request.history_interval_seconds<5||request.history_interval_seconds>3600) {
             Error(shared,BootstrapError::Protocol);return false;
         }
         if (g_install_state<0 || g_session_count>=g_sessions.size()) { Error(shared,BootstrapError::Initialize); return false; }

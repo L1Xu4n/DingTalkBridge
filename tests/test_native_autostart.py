@@ -23,7 +23,7 @@ class AutostartTests(unittest.TestCase):
         self.root = Path(self.temporary.name)
         self.config = Config(data_dir=self.root, db_path=self.root / "selected.sqlite3",
                              allowed_conversations=("selected",), excluded_conversations=("excluded",),
-                             retention_days=7, max_tool_results=20)
+                             max_tool_results=20)
 
     def tearDown(self):
         """Remove only this test's temporary files after all locks have closed."""
@@ -59,7 +59,9 @@ class AutostartTests(unittest.TestCase):
         self.assertEqual(settings["db_path"], str(self.config.database_path.resolve()))
         self.assertEqual(settings["allowed_conversations"], ["selected"])
         self.assertEqual(settings["excluded_conversations"], ["excluded"])
-        self.assertEqual(settings["retention_days"], 7)
+        self.assertNotIn("retention_days", settings)
+        self.assertNotIn("history_max_conversations", settings)
+        self.assertNotIn("history_messages_per_conversation", settings)
         process.stdin.close.assert_called_once()
 
     def test_waits_for_client_then_starts_capture(self):

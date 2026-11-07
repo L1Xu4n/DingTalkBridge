@@ -77,7 +77,7 @@ def default_controller_path(*, synthetic: bool = False) -> Path:
     """Resolve the matching production or synthetic Controller executable."""
     flavor = "synthetic" if synthetic else "production"
     executable = "BridgeControllerSynthetic.exe" if synthetic else "BridgeController.exe"
-    return Path(__file__).resolve().parents[2] / "experimental" / "native-detour" / "bootstrap" / "bin" / "0.4.0" / flavor / executable
+    return Path(__file__).resolve().parents[2] / "experimental" / "native-detour" / "bootstrap" / "bin" / "0.6.1" / flavor / executable
 
 
 def _sha256(path: Path) -> str:
@@ -369,10 +369,8 @@ def run_collect(config: Config, store: Store, args: Any = None) -> dict[str, Any
         stop_path.unlink(missing_ok=True)
     command = [str(path), "--pid", str(pid), "--hwnd", str(hwnd), "--duration", str(duration),
                "--session", session, "--mode", mode,
-               "--history-days", str(config.retention_days),
-               "--history-conversations", str(config.history_max_conversations),
-               "--history-messages", str(config.history_messages_per_conversation),
-               "--history-interval", str(config.history_interval_seconds)]
+               "--history-interval", str(config.history_interval_seconds),
+               "--attachment-directory", str((config.data_dir / "native-attachment-requests").resolve())]
     if mode == "capture":
         command.append("--stream")
     summary: dict[str, Any] = {

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime
 import hashlib
 import json
 from pathlib import Path
@@ -19,9 +19,16 @@ SCREEN_CONTEXT_SOURCES = (
     "windows_accessibility_screen", "windows_ocr_screen",
 )
 
+# Native type codes are strings; untyped imports/live records remain explicitly unknown.
+MESSAGE_TYPE_SQL = (
+    "COALESCE(NULLIF(CASE WHEN json_type(m.metadata,'$.content_type')='text' "
+    "THEN json_extract(m.metadata,'$.content_type') END,''),'unknown')"
+)
+
 
 class Store:
     def __init__(self, path: str | Path, config: Config | None = None) -> None:
+        """Open the local archive and initialize message tables and search indexes."""
         self.path = Path(path)
         self.config = config or Config(db_path=self.path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -50,7 +57,6 @@ class Store:
             CREATE INDEX IF NOT EXISTS messages_time ON messages(timestamp_epoch,seq);
         """)
         self.fts_available = self._initialize_fts()
-        self._last_prune: datetime | None = None
 
     def _initialize_fts(self) -> bool:
         existing = self.connection.execute(
@@ -91,32 +97,13 @@ class Store:
     def close(self) -> None:
         self.connection.close()
 
-    def _cutoff(self) -> float:
-        return (datetime.now(UTC) - timedelta(days=self.config.retention_days)).timestamp()
-
-    def prune(self) -> int:
-        """Apply configured retention to this bridge's own database only."""
-        with self.connection:
-            removed = self.connection.execute(
-                "DELETE FROM messages WHERE timestamp_epoch < ?", (self._cutoff(),)
-            ).rowcount
-            self.connection.execute(
-                "DELETE FROM conversations WHERE NOT EXISTS "
-                "(SELECT 1 FROM messages WHERE messages.conversation_id=conversations.id)"
-            )
-        return removed
-
     def ingest(self, record: Mapping[str, Any]) -> bool:
-        """Insert a normalized policy-permitted message without replacing existing rows."""
+        """Archive a permitted message regardless of age, without replacing duplicates."""
         normalized = normalize_record(record)
         if self.dataset_kind == "synthetic" and normalized["source"] != "synthetic":
             raise ValueError("synthetic demo databases cannot receive real records")
-        now = datetime.now(UTC)
-        if self._last_prune is None or (now - self._last_prune).total_seconds() >= 60:
-            self.prune()
-            self._last_prune = now
         epoch = parse_timestamp(normalized["timestamp"]).timestamp()
-        if not self.config.permits(normalized["conversation_id"]) or epoch < self._cutoff():
+        if not self.config.permits(normalized["conversation_id"]):
             return False
         with self.connection:
             # Do not let a duplicate alter conversation metadata.
@@ -163,7 +150,7 @@ class Store:
             raise ValueError("invalid history destination")
         self.bind_native_account(row["metadata"].get("account_id"))
         epoch = parse_timestamp(row["timestamp"]).timestamp()
-        if not self.config.permits(row["conversation_id"]) or epoch < self._cutoff():
+        if not self.config.permits(row["conversation_id"]):
             return "skipped"
         previous = self.connection.execute("SELECT * FROM messages WHERE id=?", (row["id"],)).fetchone()
         if previous is None:
@@ -206,8 +193,9 @@ class Store:
             raise ValueError("conversation_id must be a nonempty string")
 
     def _where(self, conversation_id: str | None = None) -> tuple[list[str], list[Any]]:
+        """Apply conversation selection without hiding messages based on their age."""
         self._conversation(conversation_id)
-        clauses, parameters = ["m.timestamp_epoch >= ?"], [self._cutoff()]
+        clauses, parameters = ["1=1"], []
         if conversation_id is not None:
             clauses.append("m.conversation_id=?")
             parameters.append(conversation_id)
@@ -218,13 +206,85 @@ class Store:
                 parameters.extend(ids)
         return clauses, parameters
 
+    def _page_before(self, clauses: list[str], parameters: list[Any], cursor: str | None) -> None:
+        """Continue before a message's time and sequence, preserving equal-time records."""
+        sequence = self._cursor(cursor)
+        if not sequence:
+            return
+        anchor = self.connection.execute(
+            "SELECT m.timestamp_epoch,m.seq FROM messages m WHERE m.seq=? AND " + " AND ".join(clauses),
+            (sequence, *parameters),
+        ).fetchone()
+        if anchor is None:
+            raise ValueError("cursor does not match this query; restart without a cursor")
+        clauses.append("(m.timestamp_epoch,m.seq) < (?,?)")
+        parameters.extend((anchor["timestamp_epoch"], anchor["seq"]))
+
+    @staticmethod
+    def _selection(name: str, values: list[str] | None, maximum_length: int = 4096) -> list[str]:
+        """Validate and deduplicate a multi-select filter without treating an empty list as all."""
+        if values is None:
+            return []
+        if not isinstance(values, (list, tuple)) or not 1 <= len(values) <= 100 or any(
+            not isinstance(value, str) or not value.strip() or len(value) > maximum_length for value in values
+        ):
+            raise ValueError(f"{name} must contain 1 to 100 nonempty strings")
+        return list(dict.fromkeys(values))
+
+    def _filters(self, conversation_id: str | None = None, *, conversation_ids: list[str] | None = None,
+                 start_time: str | None = None, end_time: str | None = None,
+                 sender_id: str | None = None, message_types: list[str] | None = None) -> tuple[list[str], list[Any]]:
+        """Combine conversation, half-open time range, sender and native message-type filters."""
+        clauses, parameters = self._where(conversation_id)
+        conversations = self._selection("conversation_ids", conversation_ids)
+        types = self._selection("message_types", message_types, 128)
+        if conversation_id is not None and conversations:
+            raise ValueError("use conversation_id or conversation_ids, not both")
+        for expression, values in (("m.conversation_id", conversations), (MESSAGE_TYPE_SQL, types)):
+            if values:
+                clauses.append(expression + " IN (" + ",".join("?" for _ in values) + ")")
+                parameters.extend(values)
+        start = parse_timestamp(start_time).timestamp() if start_time is not None else None
+        end = parse_timestamp(end_time).timestamp() if end_time is not None else None
+        if start is not None and end is not None and start >= end:
+            raise ValueError("start_time must be earlier than end_time")
+        for value, operator in ((start, ">="), (end, "<")):
+            if value is not None:
+                clauses.append(f"m.timestamp_epoch {operator} ?")
+                parameters.append(value)
+        if sender_id is not None:
+            if not isinstance(sender_id, str) or not sender_id.strip() or len(sender_id) > 4096:
+                raise ValueError("sender_id must be a nonempty ID of at most 4096 characters")
+            clauses.append("m.sender_id=?")
+            parameters.append(sender_id)
+        return clauses, parameters
+
+    def _match_query(self, clauses: list[str], parameters: list[Any], query: str | None) -> None:
+        """Add a literal keyword/phrase search, including Chinese and punctuation substrings."""
+        if query is None:
+            return
+        if not isinstance(query, str) or not query.strip() or len(query) > 2048:
+            raise ValueError("query must contain 1 to 2048 characters")
+        literal = "%" + query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        if self.fts_available:
+            phrase = '"' + query.replace('"', '""') + '"'
+            clauses.append("m.seq IN (SELECT rowid FROM messages_fts WHERE messages_fts MATCH ? "
+                           "UNION SELECT seq FROM messages WHERE text LIKE ? ESCAPE '\\')")
+            parameters.extend((phrase, literal))
+        else:
+            clauses.append("m.text LIKE ? ESCAPE '\\'")
+            parameters.append(literal)
+
     @staticmethod
     def _message(row: sqlite3.Row) -> dict[str, Any]:
+        """Expose message fields and the exact native type code, or unknown for untyped records."""
         result = {key: row[key] for key in (
             "id", "conversation_id", "conversation_title", "sender_id", "sender_name",
             "text", "timestamp", "source", "confidence"
         )}
         result["metadata"] = json.loads(row["metadata"])
+        content_type = result["metadata"].get("content_type")
+        result["message_type"] = content_type if isinstance(content_type, str) and content_type else "unknown"
         return result
 
     def status(self) -> dict[str, Any]:
@@ -256,7 +316,7 @@ class Store:
             "conversation_count": row["conversations"],
             "first_timestamp": row["first_timestamp"],
             "last_timestamp": row["last_timestamp"],
-            "retention_days": self.config.retention_days,
+            "retention_days": None,
             "max_tool_results": self.config.max_tool_results,
             "allowed_conversations": list(self.config.allowed_conversations),
             "excluded_conversations": list(self.config.excluded_conversations),
@@ -400,9 +460,17 @@ class Store:
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value"
             )
 
-    def list_conversations(self, limit: int = 50, cursor: str | None = None) -> dict[str, Any]:
+    def list_conversations(self, limit: int = 50, cursor: str | None = None,
+                           query: str | None = None) -> dict[str, Any]:
+        """Resolve conversation IDs by literal title/ID text, with paginated counts."""
         limit, offset = self._limit(limit), self._cursor(cursor)
         clauses, parameters = self._where()
+        if query is not None:
+            if not isinstance(query, str) or not query.strip() or len(query) > 2048:
+                raise ValueError("query must contain 1 to 2048 characters")
+            literal = "%" + query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+            clauses.append("(c.title LIKE ? ESCAPE '\\' OR c.id LIKE ? ESCAPE '\\')")
+            parameters.extend((literal, literal))
         rows = self.connection.execute(
             "SELECT c.id,c.title,COUNT(*) AS message_count,MAX(m.timestamp) AS last_timestamp "
             "FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE "
@@ -413,42 +481,63 @@ class Store:
                 "next_cursor": str(offset + min(len(rows), limit)), "has_more": len(rows) > limit}
 
     def get_messages(self, conversation_id: str | None = None, limit: int = 50,
-                     before: str | None = None, after: str | None = None) -> dict[str, Any]:
+                     before: str | None = None, after: str | None = None,
+                     cursor: str | None = None, *, conversation_ids: list[str] | None = None,
+                     start_time: str | None = None, end_time: str | None = None,
+                     sender_id: str | None = None, message_types: list[str] | None = None,
+                     query: str | None = None) -> dict[str, Any]:
+        """Read a filtered chronological page, with a cursor for the next older page."""
         limit = self._limit(limit)
-        clauses, parameters = self._where(conversation_id)
+        clauses, parameters = self._filters(conversation_id, conversation_ids=conversation_ids,
+                                           start_time=start_time, end_time=end_time,
+                                           sender_id=sender_id, message_types=message_types)
         for value, operator in ((before, "<"), (after, ">")):
             if value is not None:
                 clauses.append(f"m.timestamp_epoch {operator} ?")
                 parameters.append(parse_timestamp(value).timestamp())
+        self._match_query(clauses, parameters, query)
+        self._page_before(clauses, parameters, cursor)
         rows = self.connection.execute(
             "SELECT m.* FROM messages m WHERE " + " AND ".join(clauses)
             + " ORDER BY m.timestamp_epoch DESC,m.seq DESC LIMIT ?", (*parameters, limit + 1),
         ).fetchall()
         return {"messages": [self._message(row) for row in reversed(rows[:limit])],
+                "next_cursor": str(rows[limit - 1]["seq"]) if len(rows) > limit else None,
                 "has_more": len(rows) > limit}
 
     def search_messages(self, query: str, conversation_id: str | None = None,
-                        limit: int = 50) -> dict[str, Any]:
+                        limit: int = 50, cursor: str | None = None, *, conversation_ids: list[str] | None = None,
+                        start_time: str | None = None, end_time: str | None = None,
+                        sender_id: str | None = None, message_types: list[str] | None = None) -> dict[str, Any]:
+        """Search with the same filters and pagination as message reads, ordered newest-first."""
         if not isinstance(query, str) or not query.strip() or len(query) > 2048:
             raise ValueError("query must contain 1 to 2048 characters")
-        limit = self._limit(limit)
-        clauses, parameters = self._where(conversation_id)
-        literal = "%" + query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
-        if self.fts_available:
-            # Quote user input as a literal phrase, never an FTS expression. LIKE
-            # also finds Chinese substrings and punctuation-only searches.
-            phrase = '"' + query.replace('"', '""') + '"'
-            clauses.append("m.seq IN (SELECT rowid FROM messages_fts WHERE messages_fts MATCH ? "
-                           "UNION SELECT seq FROM messages WHERE text LIKE ? ESCAPE '\\')")
-            parameters.extend((phrase, literal))
-        else:
-            clauses.append("m.text LIKE ? ESCAPE '\\'")
-            parameters.append(literal)
+        result = self.get_messages(conversation_id, limit, cursor=cursor, conversation_ids=conversation_ids,
+                                   start_time=start_time, end_time=end_time, sender_id=sender_id,
+                                   message_types=message_types, query=query)
+        result["messages"].reverse()
+        return result
+
+    def list_message_types(self, conversation_id: str | None = None, limit: int = 50,
+                           cursor: str | None = None, *, conversation_ids: list[str] | None = None,
+                           start_time: str | None = None, end_time: str | None = None,
+                           sender_id: str | None = None, query: str | None = None) -> dict[str, Any]:
+        """List actual type codes, counts and short examples within the selected message range."""
+        limit, offset = self._limit(limit), self._cursor(cursor)
+        clauses, parameters = self._filters(conversation_id, conversation_ids=conversation_ids,
+                                           start_time=start_time, end_time=end_time, sender_id=sender_id)
+        self._match_query(clauses, parameters, query)
         rows = self.connection.execute(
-            "SELECT m.* FROM messages m WHERE " + " AND ".join(clauses)
-            + " ORDER BY m.timestamp_epoch DESC,m.seq DESC LIMIT ?", (*parameters, limit + 1),
+            "WITH selected AS (SELECT m.seq," + MESSAGE_TYPE_SQL + " AS message_type FROM messages m WHERE "
+            + " AND ".join(clauses) + "), types AS ("
+            "SELECT message_type,COUNT(*) AS message_count,MAX(seq) AS sample_seq FROM selected GROUP BY message_type) "
+            "SELECT t.message_type,t.message_count,m.id AS sample_message_id,substr(m.text,1,160) AS sample_text,"
+            "length(m.text)>160 AS sample_truncated FROM types t JOIN messages m ON m.seq=t.sample_seq "
+            "ORDER BY t.message_type LIMIT ? OFFSET ?", (*parameters, limit + 1, offset),
         ).fetchall()
-        return {"messages": [self._message(row) for row in rows[:limit]], "has_more": len(rows) > limit}
+        return {"message_types": [dict(row) for row in rows[:limit]],
+                "next_cursor": str(offset + limit) if len(rows) > limit else None,
+                "has_more": len(rows) > limit}
 
     def get_context(self, message_id: str, before: int = 10, after: int = 10) -> dict[str, Any]:
         if not isinstance(message_id, str) or not message_id:

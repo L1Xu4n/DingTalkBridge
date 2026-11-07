@@ -55,7 +55,7 @@ class AcceptanceTests(unittest.TestCase):
                 self.assertEqual(result.get('jsonrpc'), '2.0')
                 self.assertNotIn('error', result)
             tools = responses[2]['result']['tools']
-            self.assertEqual({x['name'] for x in tools}, {'bridge_status', 'list_conversations', 'get_messages', 'search_messages', 'get_context', 'poll_events'})
+            self.assertEqual({x['name'] for x in tools}, {'bridge_status', 'list_conversations', 'get_messages', 'search_messages', 'list_message_types', 'get_context', 'poll_events', 'list_attachments', 'read_attachment'})
             self.assertTrue(all(x['annotations']['readOnlyHint'] for x in tools))
             def value(n):
                 """Decode one successful MCP tool result from the acceptance session."""

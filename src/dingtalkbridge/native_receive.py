@@ -5,7 +5,7 @@ open a socket, or certify a native ABI. A producer must provide the documented
 DTO after independently verifying its field extraction. Version/hash fields are
 diagnostic declarations, never client-version gates or proof of provenance.
 Message time is an explicit timezone-aware string or null (unknown). With null,
-the archive uses observation time for ordering/retention and labels that choice;
+the archive uses observation time for ordering and labels that choice;
 observation time is never described as the original message time.
 
 Only Store.ingest receives normalized message bodies. Consumer results contain
@@ -17,7 +17,7 @@ security boundary against Python code that already has direct Store access.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 import hashlib
 import json
 from pathlib import Path
@@ -264,11 +264,6 @@ def consume_events(config: Config, store: Store, events: Iterable[Any]) -> dict[
                     continue
             if not config.permits(event["conversation_id"]) or not store.config.permits(event["conversation_id"]):
                 counts["policy_filtered"] += 1
-                continue
-            cutoff = datetime.now(UTC) - timedelta(days=min(config.retention_days, store.config.retention_days))
-            archive_timestamp = event["event_observed_at"] if event["message_timestamp"] is None else event["message_timestamp"]
-            if parse_timestamp(archive_timestamp) < cutoff:
-                counts["expired"] += 1
                 continue
             record = _record(event, synthetic=synthetic)
             inserted = store.ingest(record)

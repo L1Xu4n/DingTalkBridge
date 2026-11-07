@@ -60,7 +60,8 @@ int Run(int argc,wchar_t** argv) {
 #endif
     DWORD pid=0;HWND hwnd=nullptr;double duration=10;bool stream=false;CaptureMode mode=CaptureMode::CountOnly;
     std::string session="count_only";
-    std::uint64_t history_days=30,history_conversations=500,history_messages=1000,history_interval=30;
+    std::uint64_t history_interval=30;
+    std::wstring attachment_directory;
 #if BRIDGE_SYNTHETIC
     bool fixture_bad_start=false;
 #endif
@@ -69,10 +70,8 @@ int Run(int argc,wchar_t** argv) {
         else if(a==L"--hwnd"&&i+1<argc)hwnd=reinterpret_cast<HWND>(Number(argv[++i]));
         else if(a==L"--duration"&&i+1<argc){wchar_t* end=nullptr;duration=wcstod(argv[++i],&end);if(!end||*end)return Fail("invalid_duration");}
         else if(a==L"--session"&&i+1<argc){std::wstring value=argv[++i];if(std::any_of(value.begin(),value.end(),[](wchar_t c){return c>127;}))return Fail("invalid_session");session.clear();for(auto c:value)session.push_back(static_cast<char>(c));}
-        else if(a==L"--history-days"&&i+1<argc)history_days=Number(argv[++i]);
-        else if(a==L"--history-conversations"&&i+1<argc)history_conversations=Number(argv[++i]);
-        else if(a==L"--history-messages"&&i+1<argc)history_messages=Number(argv[++i]);
         else if(a==L"--history-interval"&&i+1<argc)history_interval=Number(argv[++i]);
+        else if(a==L"--attachment-directory"&&i+1<argc)attachment_directory=argv[++i];
 #if BRIDGE_SYNTHETIC
         else if(a==L"--fixture-bad-target-start")fixture_bad_start=true;
 #endif
@@ -82,8 +81,7 @@ int Run(int argc,wchar_t** argv) {
     }
     if(!pid||!hwnd||!(duration>=0&&duration<=3600)||session.size()>95||!SafeSessionId(session.c_str(),session.size()+1)||
        ((mode==CaptureMode::CaptureMessages)!=stream))return Fail("invalid_configuration");
-    if(!history_days||history_days>36500||!history_conversations||history_conversations>5000||
-       !history_messages||history_messages>10000||history_interval<5||history_interval>3600)return Fail("invalid_history_bounds");
+    if(history_interval<5||history_interval>3600)return Fail("invalid_history_interval");
     // No stdout body output is permitted to an interactive console or file. Stream
     // is designed for the Python parent owning a private anonymous stdout pipe.
     if(stream&&GetFileType(GetStdHandle(STD_OUTPUT_HANDLE))!=FILE_TYPE_PIPE)return Fail("stream_requires_parent_pipe");
@@ -97,8 +95,8 @@ int Run(int argc,wchar_t** argv) {
     if(!IsWindowVisible(hwnd))return Fail("target_window_not_visible");
 #endif
     BootstrapRequest r{};r.magic=kProtocolMagic;r.version=kProtocolVersion;r.bytes=sizeof(r);r.build_flavor=kBuildFlavor;r.mode=mode;
-    r.history_days=static_cast<std::uint32_t>(history_days);r.history_max_conversations=static_cast<std::uint32_t>(history_conversations);
-    r.history_max_messages=static_cast<std::uint32_t>(history_messages);r.history_interval_seconds=static_cast<std::uint32_t>(history_interval);
+    r.history_interval_seconds=static_cast<std::uint32_t>(history_interval);
+    if(!Copy(r.attachment_request_directory,attachment_directory))return Fail("attachment_directory_too_long");
     r.controller_pid=self.pid;r.target_pid=target.pid;r.target_thread_id=tid;r.controller_session_id=self.session;r.target_session_id=target.session;
     r.controller_integrity_rid=self.integrity;r.target_integrity_rid=target.integrity;r.controller_creation_time=self.creation;r.target_creation_time=target.creation;r.target_hwnd=std::uint64_t(hwnd);
     if(BCryptGenRandom(nullptr,r.nonce,sizeof(r.nonce),BCRYPT_USE_SYSTEM_PREFERRED_RNG)<0)return Fail("random_nonce");

@@ -2,9 +2,9 @@
   "data_dir": "%LOCALAPPDATA%\\DingTalkBridge",
   "allowed_conversations": [],
   "excluded_conversations": [],
-  "retention_days": 30,
   "max_tool_results": 100,
-  "history_max_conversations": 500,
-  "history_messages_per_conversation": 1000,
-  "history_interval_seconds": 30
+  "history_interval_seconds": 30,
+  "attachment_dirs": ["%USERPROFILE%\\Downloads"],
+  "attachment_cache_retention_days": 7,
+  "attachment_download_timeout_seconds": 120
 }

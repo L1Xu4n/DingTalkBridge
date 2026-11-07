@@ -13,9 +13,11 @@
 
 原生路径移植涉及 `RootDetourCore.cpp` 的入口与 RTTI profile、`payload_parser.cpp` 的对象布局。保留原分发调用，禁止用“任意版本兼容”代替实测。更新驻留 DLL 前完整退出钉钉。
 
-使用 `scripts/Test.ps1` 运行现有测试。CI 仅运行核心、原生适配和 MCP 合成验收并编译自有 fixture，不连接真实钉钉。
+使用 `scripts/Test.ps1` 运行现有测试。CI 运行核心、原生适配、MCP 合成验收和附件测试，并编译自有 fixture。实机验证范围另见各功能文档。
 
-## 本轮新增函数
+0.4.1 至 0.6.1 的功能、升级步骤和待办见 [更新记录](CHANGES_0.6.md)。
+
+## 构建与接入函数
 
 | 函数/脚本 | 作用 |
 | --- | --- |
@@ -29,6 +31,10 @@
 其它函数见 [FUNCTIONS_NATIVE.md](FUNCTIONS_NATIVE.md)。公开验证范围见 [NATIVE_LIVE_VERIFICATION.md](NATIVE_LIVE_VERIFICATION.md)。
 
 已有会话的补采配置、边界与新增函数见 [HISTORY.md](HISTORY.md)。
+
+AI 如何选择会话、日期、关键词、发送者与消息类型，见 [QUERY.md](QUERY.md)。
+
+图片及 PDF / Office 附件的读取方式、格式支持和当前实机验证范围，见 [ATTACHMENTS.md](ATTACHMENTS.md)。
 
 ## MCP 自动采集
 

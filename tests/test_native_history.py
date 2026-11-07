@@ -79,14 +79,14 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual(consume_events(self.config, self.store, [live])["destination_rejected"], 1)
         self.assertEqual(self.store.status()["message_count"], 1)
 
-    def test_retention_and_conversation_policy_still_apply_to_history(self):
-        """History import respects both age and caller-selected conversation filters."""
+    def test_old_history_is_retained_and_conversation_policy_still_applies(self):
+        """History has no age cutoff and still respects caller-selected conversations."""
         old = self.frame()
-        old["fields"]["create_time"] = str(int((self.now - timedelta(days=31)).timestamp() * 1000))
-        self.assertEqual(consume_history(self.config, self.store, old, "fixture-history")["duplicates_or_filtered"], 1)
+        old["fields"]["create_time"] = str(int((self.now - timedelta(days=3650)).timestamp() * 1000))
+        self.assertEqual(consume_history(self.config, self.store, old, "fixture-history")["inserted"], 1)
         filtered = Config(data_dir=self.root, allowed_conversations=("another-chat",))
         self.assertEqual(consume_history(filtered, self.store, self.frame(), "fixture-history")["policy_filtered"], 1)
-        self.assertEqual(self.store.status()["message_count"], 0)
+        self.assertEqual(self.store.status()["message_count"], 1)
 
     def test_empty_content_and_unknown_time_are_explicit_and_bad_sessions_are_rejected(self):
         """Keep a typed placeholder rather than dropping non-text records with no text body."""

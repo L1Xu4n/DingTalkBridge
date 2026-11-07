@@ -145,16 +145,13 @@ class NativeReceiveTests(unittest.TestCase):
         record = self.store.get_messages()["messages"][0]
         self.assertEqual(record["timestamp"], format_timestamp(self.now))
 
-    def test_retention_uses_message_time_not_recent_observation(self):
-        """Verify retention uses message time not recent observation."""
+    def test_old_messages_are_ingested_without_expiry(self):
+        """Accept old original timestamps without treating recent observation as a cutoff."""
         counts = consume_events(self.config, self.store, [self.event(
-            message_timestamp=format_timestamp(self.now - timedelta(days=31)),
+            message_timestamp=format_timestamp(self.now - timedelta(days=3650)),
             event_observed_at=format_timestamp(self.now))])
-        self.assertEqual(counts["expired"], 1)
-        self.assertEqual(counts["inserted"], 0)
-        tighter = replace(self.config, retention_days=1)
-        counts = consume_events(tighter, self.store, [self.event(message_timestamp=format_timestamp(self.now - timedelta(days=2)))])
-        self.assertEqual(counts["expired"], 1)
+        self.assertEqual(counts["expired"], 0)
+        self.assertEqual(counts["inserted"], 1)
 
     def test_null_message_time_uses_explicitly_labeled_observation_time(self):
         """Verify null message time uses explicitly labeled observation time."""
@@ -175,7 +172,8 @@ class NativeReceiveTests(unittest.TestCase):
         self.assertNotIn("native_created_at_raw", metadata)
         counts = consume_events(self.config, self.store, [self.event(message_id="expired-unknown", message_timestamp=None,
                                                                   event_observed_at=format_timestamp(self.now - timedelta(days=31)))])
-        self.assertEqual(counts["expired"], 1)
+        self.assertEqual(counts["expired"], 0)
+        self.assertEqual(counts["inserted"], 1)
         counts = consume_events(self.config, self.store, [self.event(message_timestamp=None, event_observed_at=None),
                                                         self.event(message_timestamp=None, native_created_at_raw="1794000000000")])
         self.assertEqual(counts["invalid"], 2)

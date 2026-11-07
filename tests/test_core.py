@@ -158,6 +158,44 @@ class CoreTest(unittest.TestCase):
                 self.assertEqual(len(self.store.search_messages(query)["messages"]), expected)
         self.assertEqual(self.store.status()["record_count"], 5)
 
+    def test_mcp_combines_scope_time_keyword_sender_and_type_filters(self):
+        """Combine all selectors, discover scoped types and continue the filtered result page."""
+        start, end = self.now, self.now + timedelta(days=1)
+        fixtures = (
+            ("project", "user-a", "text-code", start, "预算确认"),
+            ("other", "user-a", "text-code", start + timedelta(seconds=1), "预算补充"),
+            ("project", "user-a", "file-code", start, "预算附件"),
+            ("project", "user-b", "text-code", start, "预算发送者不符"),
+            ("outside", "user-a", "text-code", start, "预算会话不符"),
+            ("project", "user-a", "text-code", start - timedelta(seconds=1), "预算开始前"),
+            ("project", "user-a", "text-code", end, "预算结束边界"),
+            ("project", "user-a", "text-code", start, "其他内容"),
+            ("project", "user-a", None, start, "预算未标类型"),
+        )
+        for index, (cid, sender, content_type, timestamp, text) in enumerate(fixtures):
+            metadata = {} if content_type is None else {"content_type": content_type}
+            self.store.ingest(self.record(index, conversation_id=cid, conversation_title=cid, sender_id=sender,
+                                         timestamp=format_timestamp(timestamp), text=text, metadata=metadata))
+        server = self.ready_server()
+        conversations = server.call_tool("list_conversations", {"query": "proj"})["structuredContent"]["conversations"]
+        self.assertEqual([row["id"] for row in conversations], ["project"])
+        scope = {"conversation_ids": ["project", "other"], "start_time": start.isoformat(),
+                 "end_time": end.isoformat(), "sender_id": "user-a", "query": "预算"}
+        types = server.call_tool("list_message_types", scope)["structuredContent"]["message_types"]
+        self.assertEqual({row["message_type"]: row["message_count"] for row in types},
+                         {"text-code": 2, "file-code": 1, "unknown": 1})
+        self.assertTrue(all(row["sample_message_id"] and "预算" in row["sample_text"] for row in types))
+        for tool in ("get_messages", "search_messages"):
+            arguments = dict(scope, message_types=["text-code"], limit=1)
+            first = server.call_tool(tool, arguments)["structuredContent"]
+            second = server.call_tool(tool, dict(arguments, cursor=first["next_cursor"]))["structuredContent"]
+            self.assertEqual([row["id"] for row in first["messages"] + second["messages"]], ["record-1", "record-0"])
+            self.assertTrue(first["has_more"])
+            self.assertFalse(second["has_more"])
+            self.assertEqual(second["messages"][0]["message_type"], "text-code")
+        for updates in ({"start_time": end.isoformat()}, {"conversation_id": "project"}):
+            self.assertTrue(server.call_tool("get_messages", dict(scope, **updates))["isError"])
+
     def test_context_uses_same_conversation_and_stable_timestamp_ties(self):
         timestamp = format_timestamp(self.now)
         for index in range(1, 6):
@@ -188,6 +226,7 @@ class CoreTest(unittest.TestCase):
                 self.store.poll_events(cursor=cursor)
 
     def test_conversation_pagination_and_all_read_paths_enforce_policy(self):
+        """Conversation policy applies to every read path, including type discovery."""
         for index, conversation in enumerate(("a", "b", "c")):
             self.store.ingest(self.record(index, conversation_id=conversation, text="find me"))
         page = self.store.list_conversations(limit=1)
@@ -200,21 +239,47 @@ class CoreTest(unittest.TestCase):
         self.assertEqual(len(self.store.search_messages("find")["messages"]), 1)
         self.assertEqual(len(self.store.poll_events()["messages"]), 1)
         self.assertEqual(len(self.store.list_conversations()["conversations"]), 1)
+        self.assertEqual(self.store.list_message_types()["message_types"][0]["message_count"], 1)
         self.assertEqual(self.store.get_context("record-1")["messages"], [])
         self.assertFalse(self.store.ingest(self.record(10, conversation_id="b")))
 
-    def test_retention_is_hidden_on_reads_but_deleted_only_on_write_or_prune(self):
-        self.store.ingest(self.record())
-        old = self.now - timedelta(days=40)
-        self.store.connection.execute("UPDATE messages SET timestamp=?,timestamp_epoch=?", (format_timestamp(old), old.timestamp()))
-        self.store.connection.commit()
+    def test_old_messages_remain_readable_after_reopen_and_new_ingestion(self):
+        """Old imports survive reopening and later writes, across all archive read tools."""
+        old = format_timestamp(self.now - timedelta(days=3650))
+        self.assertTrue(self.store.ingest(self.record(timestamp=old)))
         self.store.close()
         self.store = Store(self.config.database_path, self.config)
-        self.assertEqual(self.store.status()["record_count"], 0)
-        self.assertEqual(self.store.get_messages()["messages"], [])
-        self.assertEqual(self.store.connection.execute("SELECT COUNT(*) FROM messages").fetchone()[0], 1)
-        self.assertEqual(self.store.prune(), 1)
-        self.assertFalse(self.store.ingest(self.record(2, timestamp=format_timestamp(old))))
+        self.assertTrue(self.store.ingest(self.record(2)))
+        self.assertEqual(self.store.status()["record_count"], 2)
+        self.assertIsNone(self.store.status()["retention_days"])
+        self.assertEqual(len(self.store.get_messages()["messages"]), 2)
+        self.assertEqual(len(self.store.search_messages("测试")["messages"]), 2)
+        self.assertEqual(len(self.store.poll_events()["messages"]), 2)
+        self.assertEqual(self.store.list_conversations()["conversations"][0]["message_count"], 2)
+        self.assertEqual(self.store.get_context("record-1")["message"]["timestamp"], old)
+
+    def test_mcp_pages_all_equal_timestamp_messages_without_duplicates(self):
+        """Read and search beyond page size even when all old messages share a timestamp."""
+        old = format_timestamp(self.now - timedelta(days=3650))
+        for index in range(7):
+            self.store.ingest(self.record(index, timestamp=old))
+        server = self.ready_server()
+        for name in ("get_messages", "search_messages"):
+            arguments = {"limit": 2, "conversation_id": "project"}
+            if name == "search_messages":
+                arguments["query"] = "测试"
+            identifiers = []
+            for _ in range(4):
+                response = server.call_tool(name, arguments)
+                self.assertFalse(response["isError"])
+                page = response["structuredContent"]
+                identifiers.extend(row["id"] for row in page["messages"])
+                if not page["has_more"]:
+                    self.assertIsNone(page["next_cursor"])
+                    break
+                arguments["cursor"] = page["next_cursor"]
+            self.assertEqual(len(identifiers), 7)
+            self.assertEqual(set(identifiers), {f"record-{index}" for index in range(7)})
 
     def test_status_reads_collector_file_and_labels_screen_context(self):
         self.assertEqual(self.store.status()["collection_state"], "not_started")
@@ -440,16 +505,31 @@ class CoreTest(unittest.TestCase):
             import_jsonl(self.store, self.directory / "unused.jsonl")
 
     def test_config_validates_unknown_fields_maximum_and_environment_paths(self):
+        """Validate active settings and attachment policy while ignoring retired archive limits."""
         path = self.directory / "settings.json"
         path.write_text(json.dumps({"data_dir": "%TEMP%\\bridge-test" if os.name == "nt" else "$TMPDIR/bridge-test", "max_tool_results": 12}), encoding="utf-8")
         loaded = load_config(path)
         self.assertEqual(loaded.max_tool_results, 12)
+        self.assertEqual(loaded.attachment_cache_retention_days, 7)
+        self.assertEqual(loaded.attachment_download_timeout_seconds, 120)
         if os.name == "nt":
             self.assertNotIn("%TEMP%", str(loaded.data_dir))
-        for values in ({"unknown": 1}, {"max_tool_results": 201}, {"retention_days": True}, {"allowed_conversations": "all"}):
+        for values in ({"unknown": 1}, {"max_tool_results": 201}, {"history_interval_seconds": True}, {"allowed_conversations": "all"},
+                       {"attachment_cache_retention_days": -1}, {"attachment_cache_retention_days": True},
+                       {"attachment_download_timeout_seconds": 0}, {"attachment_download_timeout_seconds": 3601}):
             path.write_text(json.dumps(values), encoding="utf-8")
             with self.subTest(values=values), self.assertRaises(ValueError):
                 load_config(path)
+        path.write_text(json.dumps({"attachment_cache_retention_days": 0, "attachment_download_timeout_seconds": 300}), encoding="utf-8")
+        loaded = load_config(path)
+        self.assertEqual(loaded.attachment_cache_retention_days, 0)
+        self.assertEqual(loaded.attachment_download_timeout_seconds, 300)
+        path.write_text(json.dumps({"retention_days": 1, "history_max_conversations": 1,
+                                    "history_messages_per_conversation": 1}), encoding="utf-8")
+        loaded = load_config(path)
+        self.assertFalse(hasattr(loaded, "retention_days"))
+        self.assertFalse(hasattr(loaded, "history_max_conversations"))
+        self.assertFalse(hasattr(loaded, "history_messages_per_conversation"))
 
     def test_config_explicit_then_environment_then_default_precedence(self):
         default_path = self.directory / "settings.json"
@@ -499,34 +579,40 @@ class CoreTest(unittest.TestCase):
         self.assertIn("selected settings file does not exist", process.stderr)
 
     def test_mcp_negotiates_three_versions_and_annotations(self):
+        """Advertise the supported protocol versions and all read-only tools."""
         for version in SUPPORTED_PROTOCOLS:
             server = MCPServer(self.store)
             response = server.handle(self.request("initialize", {"protocolVersion": version, "capabilities": {}, "clientInfo": {"name": "test", "version": "1"}}))
             self.assertEqual(response["result"]["protocolVersion"], version)
         server.handle({"jsonrpc": "2.0", "method": "notifications/initialized"})
         tools = server.handle(self.request("tools/list"))["result"]["tools"]
-        self.assertEqual(len(tools), 6)
+        self.assertEqual(len(tools), 9)
         for tool in tools:
             self.assertFalse(tool["inputSchema"]["additionalProperties"])
             self.assertTrue(tool["annotations"]["readOnlyHint"])
             self.assertFalse(tool["annotations"]["destructiveHint"])
 
     def test_mcp_rejects_extra_fields_bad_limits_and_unknown_tools(self):
+        """Reject malformed filters and paging arguments before querying the archive."""
         server = self.ready_server()
         for name, arguments in (("bridge_status", {"send": "x"}), ("get_messages", {"limit": 0}),
                                 ("get_messages", {"limit": 201}), ("get_messages", {"limit": True}),
                                 ("search_messages", {"query": ""}), ("get_messages", {"before": "yesterday"}),
-                                ("poll_events", {"cursor": "-1"}), ("send_message", {})):
+                                ("poll_events", {"cursor": "-1"}), ("get_messages", {"conversation_ids": []}),
+                                ("get_messages", {"message_types": "text"}), ("get_messages", {"message_types": [True]}),
+                                ("get_messages", {"sender_id": " "}), ("get_messages", {"start_time": "2026-11-07"}),
+                                ("send_message", {})):
             response = server.handle(self.request("tools/call", {"name": name, "arguments": arguments}))
             with self.subTest(name=name, arguments=arguments):
                 self.assertEqual(response["error"]["code"], -32602)
 
     def test_mcp_resource_matches_status_and_all_tools_are_callable(self):
+        """Status resources and each advertised query tool work after the MCP handshake."""
         self.store.ingest(self.record())
         server = self.ready_server()
         for name, arguments in (("bridge_status", {}), ("list_conversations", {}), ("get_messages", {}),
                                 ("search_messages", {"query": "测试"}), ("get_context", {"message_id": "record-1"}),
-                                ("poll_events", {})):
+                                ("poll_events", {}), ("list_message_types", {})):
             response = server.handle(self.request("tools/call", {"name": name, "arguments": arguments}))
             with self.subTest(name=name):
                 self.assertFalse(response["result"]["isError"])

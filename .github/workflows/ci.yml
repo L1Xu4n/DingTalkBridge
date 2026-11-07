@@ -12,7 +12,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Test local core and native adapter
+      - name: Install attachment readers
+        run: python -m pip install ".[attachments]"
+      - name: Test local core, attachments and native adapter
         shell: pwsh
         run: |
           $env:PYTHONPATH = 'src'
@@ -21,6 +23,8 @@ jobs:
           python -m unittest discover -s tests -p 'test_native*.py' -q
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m unittest discover -s tests -p 'test_acceptance.py' -q
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m unittest discover -s tests -p 'test_attachments.py' -q
           exit $LASTEXITCODE
       - name: Compile native code against the owned fixture
         shell: pwsh

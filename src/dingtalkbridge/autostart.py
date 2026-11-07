@@ -42,10 +42,7 @@ def _settings(config: Config) -> bytes:
         "db_path": str(config.database_path.resolve()),
         "allowed_conversations": list(config.allowed_conversations),
         "excluded_conversations": list(config.excluded_conversations),
-        "retention_days": config.retention_days,
         "max_tool_results": config.max_tool_results,
-        "history_max_conversations": config.history_max_conversations,
-        "history_messages_per_conversation": config.history_messages_per_conversation,
         "history_interval_seconds": config.history_interval_seconds,
     }
     payload = json.dumps(values, ensure_ascii=True).encode("utf-8")

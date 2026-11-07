@@ -72,7 +72,7 @@ template<size_t N>inline bool Copy(wchar_t(&to)[N],const std::wstring& from) { i
 template<size_t N>inline bool Terminated(const wchar_t(&x)[N]) {return wmemchr(x,L'\0',N)!=nullptr;}
 // 逐项验证请求中的路径和会话字符串边界。
 inline bool RequestStringsValid(const BootstrapRequest& r) {
-    return Terminated(r.controller_image_path)&&Terminated(r.target_image_path)&&Terminated(r.controller_sid)&&Terminated(r.target_sid)&&Terminated(r.mapping_name)&&Terminated(r.pipe_name)&&SafeSessionId(r.collector_session_id,sizeof(r.collector_session_id));
+    return Terminated(r.controller_image_path)&&Terminated(r.target_image_path)&&Terminated(r.controller_sid)&&Terminated(r.target_sid)&&Terminated(r.mapping_name)&&Terminated(r.pipe_name)&&Terminated(r.attachment_request_directory)&&SafeSessionId(r.collector_session_id,sizeof(r.collector_session_id));
 }
 // 为 IPC 建立只属于当前 Windows 用户的访问控制。
 inline bool OwnSecurity(const ProcessIdentity& owner,SECURITY_ATTRIBUTES& sa,PSECURITY_DESCRIPTOR& descriptor) {
