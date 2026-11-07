@@ -280,19 +280,49 @@ class NativeControllerTests(unittest.TestCase):
                 self.assertNotIn("PRIVATE", json.dumps(result))
                 self.assertEqual(self.store.status()["record_count"], 0)
 
-    def test_output_reader_queue_is_bounded_and_detects_backpressure(self):
-        """Verify output reader queue is bounded and detects backpressure."""
+    def test_output_reader_queue_waits_for_slow_consumer_without_losing_frames(self):
+        """A full queue pauses the reader past the old fatal timeout, then resumes in order."""
         reader = supervisor._PrivateOutput(io.BytesIO(self.lines(*[self.status()] * 100)))
         reader.start()
-        reader.thread.join(timeout=1)
+        self.assertFalse(reader.done.wait(timeout=0.2))
         self.assertLessEqual(reader.items.qsize(), supervisor.QUEUE_CAPACITY)
-        self.assertTrue(reader.overflow.is_set())
+        for _ in range(100):
+            kind, raw = reader.items.get(timeout=1)
+            self.assertEqual(kind, "frame")
+            self.assertEqual(json.loads(raw), self.status())
+        reader.thread.join(timeout=1)
         self.assertTrue(reader.done.is_set())
+
+    def test_data_batch_commits_once_and_rolls_back_an_invalid_tail(self):
+        """Commit ordered data together, preserve control frames, and roll back failed batches."""
+        reader = supervisor._PrivateOutput(io.BytesIO())
+        for index in (2, 3):
+            reader.items.put(("frame", self.lines(self.event(message_id=str(index), text=f"fixture {index}"))))
+        heartbeat = ("frame", self.lines(self.status("heartbeat")))
+        reader.items.put(heartbeat)
+        commits = []
+
+        def track_commit(statement):
+            """Count transaction boundaries without retaining SQL containing message contents."""
+            if statement == "COMMIT":
+                commits.append(1)
+
+        self.store.connection.set_trace_callback(track_commit)
+        counts, pending = supervisor._consume_batch(self.config, self.store, self.event(message_id="1", text="fixture 1"), 100,
+                                                    reader, synthetic=False, session=self.session)
+        self.assertEqual((counts["inserted"], len(commits)), (3, 1))
+        self.assertEqual(pending, heartbeat)
+        reader.items.put(("frame", self.lines(self.event(message_id="5", text="fixture 5", app_version=""))))
+        with self.assertRaisesRegex(supervisor.CollectorError, "dto_rejected"):
+            supervisor._consume_batch(self.config, self.store, self.event(message_id="4", text="fixture 4"), 100,
+                                      reader, synthetic=False, session=self.session)
+        self.assertEqual(self.store.status()["record_count"], 3)
+        self.assertEqual(len(commits), 1)
 
     def test_keyboard_interrupt_requests_stop_and_nonzero_exit_is_failure(self):
         """Verify keyboard interrupt requests stop and nonzero exit is failure."""
         output = SimpleNamespace(items=SimpleNamespace(get=Mock(side_effect=KeyboardInterrupt)),
-                                 overflow=threading.Event(), done=threading.Event(), stop=threading.Event(), start=Mock())
+                                 discard=threading.Event(), done=threading.Event(), stop=threading.Event(), start=Mock())
         with patch.object(supervisor, "_PrivateOutput", return_value=output):
             result, process, _ = self.run_mock(b"")
         self.assertEqual(result["status"], "stopped")

@@ -38,7 +38,8 @@ STATUS_TYPE = "bridge_native_status"
 STARTUP_TIMEOUT_SECONDS = 30.0
 HEARTBEAT_TIMEOUT_SECONDS = 15.0
 STOP_TIMEOUT_SECONDS = 5.0
-QUEUE_CAPACITY = 16
+QUEUE_CAPACITY = 64
+BATCH_MAX_BYTES = 4 * 1024 * 1024
 MAX_COUNTER = 2**63 - 1
 IS_WINDOWS = os.name == "nt"
 _RECEIVE_COUNTERS = (
@@ -77,7 +78,7 @@ def default_controller_path(*, synthetic: bool = False) -> Path:
     """Resolve the matching production or synthetic Controller executable."""
     flavor = "synthetic" if synthetic else "production"
     executable = "BridgeControllerSynthetic.exe" if synthetic else "BridgeController.exe"
-    return Path(__file__).resolve().parents[2] / "experimental" / "native-detour" / "bootstrap" / "bin" / "0.6.1" / flavor / executable
+    return Path(__file__).resolve().parents[2] / "experimental" / "native-detour" / "bootstrap" / "bin" / "0.6.2" / flavor / executable
 
 
 def _sha256(path: Path) -> str:
@@ -225,7 +226,7 @@ class _PrivateOutput:
     def __init__(self, stream: Any) -> None:
         """Prepare a bounded queue for private Controller stdout frames."""
         self.items: queue.Queue[tuple[str, bytes | None]] = queue.Queue(maxsize=QUEUE_CAPACITY)
-        self.overflow = threading.Event()
+        self.discard = threading.Event()
         self.done = threading.Event()
         self.stop = threading.Event()
         self.stream = stream
@@ -236,15 +237,16 @@ class _PrivateOutput:
         self.thread.start()
 
     def _put(self, kind: str, frame: bytes | None = None) -> bool:
-        """Enqueue a frame or signal backpressure rather than using unbounded RAM."""
-        if self.stop.is_set():
-            return False
-        try:
-            self.items.put((kind, frame), timeout=0.1)
-            return True
-        except queue.Full:
-            self.overflow.set()
-            return False
+        """Wait for bounded queue capacity, propagating backpressure without dropping a frame."""
+        while not self.stop.is_set():
+            if self.discard.is_set():
+                return True
+            try:
+                self.items.put((kind, frame), timeout=0.1)
+                return True
+            except queue.Full:
+                continue
+        return False
 
     def _read(self) -> None:
         """Read complete bounded JSONL frames until shutdown or stream failure."""
@@ -331,6 +333,35 @@ def _consume_frame(config: Config, store: Store, frame: dict[str, Any], *, synth
     return consume_events(config, store, [payload])
 
 
+def _consume_batch(config: Config, store: Store, first: dict[str, Any], first_size: int,
+                   output: _PrivateOutput, *, synthetic: bool, session: str) -> tuple[dict[str, int], Any]:
+    """Commit consecutive data frames together, returning the next control frame in stream order."""
+    totals = {key: 0 for key in _RECEIVE_COUNTERS}
+    frame, size, pending = first, first_size, None
+    with store.write_batch():
+        for index in range(QUEUE_CAPACITY):
+            counts = _consume_frame(config, store, frame, synthetic=synthetic, session=session)
+            if any(counts[key] for key in ("invalid", "destination_rejected", "storage_errors", "stream_errors")):
+                raise _fail("dto_rejected")
+            for key, value in counts.items():
+                totals[key] += value
+            if index + 1 == QUEUE_CAPACITY:
+                break
+            try:
+                pending = output.items.get_nowait()
+            except queue.Empty:
+                break
+            kind, raw = pending
+            if kind != "frame" or raw is None or size + len(raw) > BATCH_MAX_BYTES:
+                break
+            frame = _json_object(raw)
+            if frame.get("type") == STATUS_TYPE:
+                break
+            size += len(raw)
+            pending = None
+    return totals, pending
+
+
 def _acquire_lock(config: Config, name: str = "native-collector.lock") -> Any:
     """Hold a collector or startup byte lock; lock files do not survive as live owners."""
     import msvcrt
@@ -386,7 +417,8 @@ def run_collect(config: Config, store: Store, args: Any = None) -> dict[str, Any
         "database_path_hash": hashlib.sha256(str(store.path.resolve()).casefold().encode("utf-8")).hexdigest(),
     }
     process = output = None
-    active_since = last_heartbeat = None
+    active_since = last_activity = None
+    pending = None
     started = last_status_write = time.monotonic()
     stopped_reported = False
     try:
@@ -408,18 +440,16 @@ def run_collect(config: Config, store: Store, args: Any = None) -> dict[str, Any
                 summary["status"] = "stopped"
                 break
             now = time.monotonic()
-            if output.overflow.is_set():
-                summary["dropped_stdout_frames"] = 1
-                raise _fail("output_backpressure")
             if active_since is None and now - started >= STARTUP_TIMEOUT_SECONDS:
                 raise _fail("startup_timeout")
-            if last_heartbeat is not None and now - last_heartbeat >= HEARTBEAT_TIMEOUT_SECONDS:
+            if last_activity is not None and now - last_activity >= HEARTBEAT_TIMEOUT_SECONDS and pending is None and output.items.empty():
                 raise _fail("heartbeat_timeout")
             if active_since is not None and duration > 0 and now - active_since >= duration:
                 summary["status"] = "completed"
                 break
             try:
-                kind, raw = output.items.get(timeout=0.1)
+                kind, raw = pending if pending is not None else output.items.get(timeout=0.1)
+                pending = None
             except queue.Empty:
                 if output.done.is_set():
                     break
@@ -448,16 +478,14 @@ def run_collect(config: Config, store: Store, args: Any = None) -> dict[str, Any
                         active_since = now
                     summary["controller_active_reported"] = True
                     summary["status"] = "available"
-                    last_heartbeat = now
                 summary["heartbeat_at"] = _stamp()
             else:
                 if mode != "capture" or active_since is None or stopped_reported:
                     raise _fail("unexpected_data_frame")
-                counts = _consume_frame(config, store, frame, synthetic=synthetic, session=session)
+                counts, pending = _consume_batch(config, store, frame, len(raw), output, synthetic=synthetic, session=session)
                 for key, value in counts.items():
                     summary["native_counts"][key] = min(MAX_COUNTER, summary["native_counts"][key] + value)
-                if any(counts[key] for key in ("invalid", "destination_rejected", "storage_errors", "stream_errors")):
-                    raise _fail("dto_rejected")
+            last_activity = time.monotonic()
             if now - last_status_write >= 1:
                 _write_status(config, summary)
                 last_status_write = now
@@ -474,6 +502,9 @@ def run_collect(config: Config, store: Store, args: Any = None) -> dict[str, Any
     except Exception:
         summary.update(status="failed", failure_reason="controller_operation_failed")
     finally:
+        if output is not None:
+            # Keep draining stdout during cooperative shutdown even when the consumer has stopped.
+            output.discard.set()
         if process is not None:
             summary["graceful_stop"] = _request_stop(process)
             exit_code = process.poll()

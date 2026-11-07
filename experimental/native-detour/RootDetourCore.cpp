@@ -182,11 +182,11 @@ bool HistoryActive(void* opaque) noexcept { return Live(static_cast<Session*>(op
 bool QueueHistory(void* opaque,const std::string& frame) noexcept {
     auto* session=static_cast<Session*>(opaque);
     if(frame.size()>kMaximumFrame)return false;
-    const auto deadline=GetTickCount64()+5000;
     try {
-        while(AccountValid(session) && GetTickCount64()<deadline) {
+        while(AccountValid(session)) {
             { std::lock_guard<std::mutex> lock(session->queue_mutex);
-              if(session->queue.size()<kMaximumQueueMessages && frame.size()<=kMaximumQueueBytes-session->queue_bytes) {
+              // Reserve capacity for live notifications while historical traffic is backpressured.
+              if(session->queue.size()<kMaximumQueueMessages-16 && session->queue_bytes<=3*1024*1024 && frame.size()<=3*1024*1024-session->queue_bytes) {
                   QueuedMessage row;row.bytes=frame.size();row.raw_frame=frame;
                   session->queue_bytes+=row.bytes;session->queue.push_back(std::move(row));
                   Increment(&session->shared->messages_enqueued);return true;
@@ -281,7 +281,7 @@ std::string Frame(const Session& session,const QueuedMessage& row) {
     if (result.size()>kMaximumFrame) throw 1;
     return result;
 }
-// 执行带超时和取消处理的管道写入。
+// Wait for downstream capacity while responding to stop and controller loss.
 bool WriteFrame(HANDLE pipe,const std::string& frame,Session* session) {
     struct PendingWrite { OVERLAPPED operation{}; Handle event; std::string bytes; };
     auto pending=std::make_unique<PendingWrite>();
@@ -289,12 +289,11 @@ bool WriteFrame(HANDLE pipe,const std::string& frame,Session* session) {
     pending->operation.hEvent=pending->event.value;pending->bytes=frame; DWORD written=0;
     BOOL done=WriteFile(pipe,pending->bytes.data(),static_cast<DWORD>(pending->bytes.size()),&written,&pending->operation);
     if (!done && GetLastError()!=ERROR_IO_PENDING) return false;
-    const ULONGLONG deadline=GetTickCount64()+3000;
     while (!done) {
         HANDLE waits[]{pending->event.value,session->controller};
         DWORD result=WaitForMultipleObjects(2,waits,FALSE,100);
         if (result==WAIT_OBJECT_0) { done=GetOverlappedResult(pipe,&pending->operation,&written,FALSE); break; }
-        if (result!=WAIT_TIMEOUT || !Live(session) || GetTickCount64()>=deadline) {
+        if (result!=WAIT_TIMEOUT || !Live(session)) {
             CancelIoEx(pipe,&pending->operation);
             // Do not leave an app worker blocked indefinitely or free pending I/O.
             // Exceptional delayed cancellation retains this bounded owned object;

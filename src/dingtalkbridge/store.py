@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import datetime
 import hashlib
 import json
@@ -97,6 +98,16 @@ class Store:
     def close(self) -> None:
         self.connection.close()
 
+    @contextmanager
+    def write_batch(self):
+        """Commit a bounded group once; nested archive writes participate in the same transaction."""
+        if self.connection.in_transaction:
+            yield
+            return
+        with self.connection:
+            self.connection.execute("BEGIN IMMEDIATE")
+            yield
+
     def ingest(self, record: Mapping[str, Any]) -> bool:
         """Archive a permitted message regardless of age, without replacing duplicates."""
         normalized = normalize_record(record)
@@ -105,7 +116,7 @@ class Store:
         epoch = parse_timestamp(normalized["timestamp"]).timestamp()
         if not self.config.permits(normalized["conversation_id"]):
             return False
-        with self.connection:
+        with self.write_batch():
             # Do not let a duplicate alter conversation metadata.
             if self.connection.execute(
                 "SELECT 1 FROM messages WHERE id=? OR fingerprint=?",
@@ -135,10 +146,15 @@ class Store:
         return row[0] if row else None
 
     def bind_native_account(self, account_id: str) -> None:
-        """Bind one account to this archive and reject cross-account collection."""
+        """Check an existing binding without writing; atomically bind a previously empty archive."""
         if self.dataset_kind == "synthetic" or not isinstance(account_id, str) or re.fullmatch(r"[1-9][0-9]{0,18}", account_id) is None:
             raise ValueError("invalid native account binding")
-        with self.connection:
+        current = self.native_account_id()
+        if current is not None:
+            if current != account_id:
+                raise ValueError("native account changed; select a separate data directory")
+            return
+        with self.write_batch():
             self.connection.execute("INSERT OR IGNORE INTO bridge_metadata(key,value) VALUES('native_account_id',?)", (account_id,))
             if self.native_account_id() != account_id:
                 raise ValueError("native account changed; select a separate data directory")
@@ -163,7 +179,7 @@ class Store:
         fingerprint = record_fingerprint(row)
         if previous["fingerprint"] == fingerprint and previous["conversation_title"] == row["conversation_title"] and old_metadata.get("client_fields") == row["metadata"].get("client_fields"):
             return "skipped"
-        with self.connection:
+        with self.write_batch():
             self.connection.execute(
                 "UPDATE messages SET fingerprint=?,conversation_title=?,sender_id=?,sender_name=?,text=?,timestamp=?,"
                 "timestamp_epoch=?,source=?,confidence=?,metadata=? WHERE id=?",

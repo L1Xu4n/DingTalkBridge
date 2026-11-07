@@ -6,6 +6,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstring>
+#include <deque>
 #include <functional>
 #include <filesystem>
 #include <fstream>
@@ -286,7 +287,7 @@ void DownloadRequests(std::uintptr_t base,const BootstrapRequest& request,std::i
     } catch(...) {}
 }
 
-// Backfill every available page regardless of age/count, then query changed conversations.
+// Round-robin one page per conversation so large histories cannot monopolize the first pass.
 void Run(std::uintptr_t base,const BootstrapRequest& request,SharedState* state,
          void* context,Active active,Emit emit) noexcept {
     InterlockedExchange(&state->history_running,1);
@@ -307,46 +308,55 @@ void Run(std::uintptr_t base,const BootstrapRequest& request,SharedState* state,
             DownloadRequests(base,request,account,context,active);
             auto conversations=Conversations(base,context,active);
             InterlockedExchange64(&state->history_conversations,static_cast<LONG64>(conversations.size()));
+            struct Scan {
+                Fields conversation;
+                std::string previous_mid;
+                std::int64_t cursor=0;
+                std::set<std::int64_t> cursors;
+            };
+            std::deque<Scan> pending;
             for(const auto& conversation:conversations) {
                 if(!active(context))break;
-                DownloadRequests(base,request,account,context,active);
                 const auto cid=Field(conversation,"cid"),last=Field(conversation,"lastMid");
                 if(cid.empty()||cid.size()>4096)continue;
                 const auto previous=completed.find(cid);
                 if(previous!=completed.end() && previous->second==last)continue;
-                const auto previous_mid=previous==completed.end()?std::string{}:previous->second;
-                std::int64_t cursor=0;bool finished=false;
-                std::set<std::int64_t> cursors;
-                while(active(context)) {
-                    DownloadRequests(base,request,account,context,active);
-                    if(!ReadAccountUid(base,current)||current!=account) {InterlockedExchange(&state->history_stage,7);throw std::runtime_error("account_changed");}
-                    InterlockedExchange(&state->history_stage,4);
-                    auto page=Page(base,cid,cursor,context,active);
+                pending.push_back({conversation,previous==completed.end()?std::string{}:previous->second,0,{}});
+            }
+            while(active(context) && !pending.empty()) {
+                auto scan=std::move(pending.front());
+                pending.pop_front();
+                const auto cid=Field(scan.conversation,"cid"),last=Field(scan.conversation,"lastMid");
+                DownloadRequests(base,request,account,context,active);
+                if(!ReadAccountUid(base,current)||current!=account) {InterlockedExchange(&state->history_stage,7);throw std::runtime_error("account_changed");}
+                InterlockedExchange(&state->history_stage,4);
+                auto page=Page(base,cid,scan.cursor,context,active);
+                if(!active(context))break;
+                if(page->failed) {InterlockedIncrement64(&state->history_errors);continue;}
+                InterlockedIncrement64(&state->history_pages);
+                bool known=false;
+                for(const auto& row:page->rows) {
                     if(!active(context))break;
-                    if(page->failed) {InterlockedIncrement64(&state->history_errors);break;}
-                    InterlockedIncrement64(&state->history_pages);
-                    bool known=false;
-                    for(const auto& row:page->rows) {
-                        if(!active(context))break;
-                        if(!ReadAccountUid(base,current)||current!=account) {InterlockedExchange(&state->history_stage,7);throw std::runtime_error("account_changed");}
-                        if(Field(row,"cid")!=cid || Field(row,"mid").empty())continue;
-                        if(!previous_mid.empty() && Field(row,"mid")==previous_mid)known=true;
-                        if(!emit(context,Frame(request,account,conversation,row)))throw std::runtime_error("delivery_stopped");
-                        InterlockedIncrement64(&state->history_messages);
-                    }
-                    auto next=Integer(Field(page->metadata,"next_cursor"));
-                    if(known||page->rows.empty()||next<=0) {finished=true;break;}
-                    // The client cursor is a millisecond timestamp and can include its boundary row.
-                    // Move past that boundary once; an ignored/backwards cursor remains an error.
-                    if(next==cursor) {
-                        if(next<=1) {finished=true;break;}
-                        --next;
-                    }
-                    if((cursor>0 && next>cursor)||!cursors.insert(next).second) {InterlockedIncrement64(&state->history_errors);break;}
-                    cursor=next;
+                    if(!ReadAccountUid(base,current)||current!=account) {InterlockedExchange(&state->history_stage,7);throw std::runtime_error("account_changed");}
+                    if(Field(row,"cid")!=cid || Field(row,"mid").empty())continue;
+                    if(!scan.previous_mid.empty() && Field(row,"mid")==scan.previous_mid)known=true;
+                    if(!emit(context,Frame(request,account,scan.conversation,row)))throw std::runtime_error("delivery_stopped");
+                    InterlockedIncrement64(&state->history_messages);
                 }
-                // Failed/looping pages remain pending for the next pass instead of losing older history.
-                if(finished && active(context))completed[cid]=last;
+                if(!active(context))break;
+                auto next=Integer(Field(page->metadata,"next_cursor"));
+                if(known||page->rows.empty()||next<=0||(next==scan.cursor && next<=1)) {
+                    completed[cid]=last;
+                    continue;
+                }
+                // Preserve the client's millisecond-boundary correction and loop detection.
+                if(next==scan.cursor)--next;
+                if((scan.cursor>0 && next>scan.cursor)||!scan.cursors.insert(next).second) {
+                    InterlockedIncrement64(&state->history_errors);
+                    continue;
+                }
+                scan.cursor=next;
+                pending.push_back(std::move(scan));
             }
             InterlockedExchange(&state->history_stage,5);
             for(unsigned elapsed=0;elapsed<request.history_interval_seconds*1000 && active(context);elapsed+=200) {
