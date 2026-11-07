@@ -586,7 +586,7 @@ class CoreTest(unittest.TestCase):
             self.assertEqual(response["result"]["protocolVersion"], version)
         server.handle({"jsonrpc": "2.0", "method": "notifications/initialized"})
         tools = server.handle(self.request("tools/list"))["result"]["tools"]
-        self.assertEqual(len(tools), 9)
+        self.assertEqual(len(tools), 10)
         for tool in tools:
             self.assertFalse(tool["inputSchema"]["additionalProperties"])
             self.assertTrue(tool["annotations"]["readOnlyHint"])

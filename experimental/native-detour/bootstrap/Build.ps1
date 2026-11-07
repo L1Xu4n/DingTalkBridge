@@ -18,7 +18,7 @@ if (-not $MsvcRoot) {
 if (-not $SdkVersion) {
     $SdkVersion = (Get-ChildItem -LiteralPath (Join-Path $SdkRoot 'Include') -Directory | Where-Object { $_.Name -match '^\d+\.\d+\.\d+\.\d+$' } | Sort-Object { [version]$_.Name } -Descending | Select-Object -First 1).Name
 }
-if (-not $OutputRoot) { $OutputRoot = Join-Path $PSScriptRoot 'bin\0.6.2' }
+if (-not $OutputRoot) { $OutputRoot = Join-Path $PSScriptRoot 'bin\0.6.3' }
 $OutputRoot = [IO.Path]::GetFullPath($OutputRoot)
 if ($Target -ne 'synthetic') {
     if (-not $DingTalkPath) {
@@ -73,7 +73,7 @@ constexpr wchar_t kExpectedMainFramePath[]=$(CppString $main);
     if(-not(Test-Path -LiteralPath $core)){throw 'RootDetourCore.cpp unavailable; production cannot use the synthetic stub'}
     $objects=@();$sources=@((Join-Path $PSScriptRoot 'BootstrapDll.cpp'),$core)
     if($core -notlike '*SyntheticCore.cpp'){
-        $sources+=@((Join-Path $nativeRoot 'payload\payload_parser.cpp'),(Join-Path $nativeRoot 'payload\safe_read.cpp'),(Join-Path $nativeRoot 'history\HistoryReader.cpp'))
+        $sources+=@((Join-Path $nativeRoot 'payload\payload_parser.cpp'),(Join-Path $nativeRoot 'payload\safe_read.cpp'),(Join-Path $nativeRoot 'history\HistoryReader.cpp'),(Join-Path $nativeRoot 'history\NativeFiles.cpp'))
         foreach($name in @('buffer.c','hook.c','trampoline.c','hde\hde64.c')){$sources+=Join-Path $nativeRoot "minhook\src\$name"}
     }
     foreach($source in $sources){

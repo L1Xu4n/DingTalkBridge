@@ -1,5 +1,6 @@
 #define NOMINMAX
 #include "HistoryReader.h"
+#include "NativeFiles.h"
 #include "../payload/safe_read.h"
 #include <array>
 #include <charconv>
@@ -259,7 +260,21 @@ void DownloadRequests(std::uintptr_t base,const BootstrapRequest& request,std::i
                 std::string uid,json;std::getline(source,uid);std::getline(source,json);
                 std::int64_t current=0;
                 if(Integer(uid)!=account||!ReadAccountUid(base,current)||current!=account)throw std::runtime_error("account_changed");
-                if(json=="media") {
+                if(json=="group-space" || json=="list-directory") {
+                    std::string body; std::getline(source,body);
+                    auto result=item.path(); result.replace_extension(L".result");
+                    QueryFiles(base,json,body,result,outcome,account);
+                } else if(json=="cloud-file") {
+                    std::string cid,space,file,path; std::getline(source,cid);std::getline(source,space);std::getline(source,file);std::getline(source,path);
+                    const auto target=std::filesystem::u8path(path);
+                    if(cid.empty()||space.empty()||file.empty()||!target.is_absolute())throw std::runtime_error("cloud_file_request_invalid");
+                    DownloadCloudFile(base,cid,space,file,target,outcome,account);
+                } else if(json=="inline-media") {
+                    std::string media,path; std::getline(source,media); std::getline(source,path);
+                    const auto target=std::filesystem::u8path(path);
+                    if(!target.is_absolute())throw std::runtime_error("media_path_invalid");
+                    DownloadInlineImage(base,media,target,outcome,account);
+                } else if(json=="media") {
                     std::string cid,mid,path,timestamp;std::getline(source,cid);std::getline(source,mid);std::getline(source,path);std::getline(source,timestamp);
                     const auto target=std::filesystem::u8path(path);
                     if(cid.empty()||Integer(mid)<=0||!target.is_absolute())throw std::runtime_error("media_request_invalid");

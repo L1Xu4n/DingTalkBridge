@@ -73,6 +73,88 @@ class AttachmentTests(unittest.TestCase):
         self.store.config = replace(self.config, excluded_conversations=("fixture",))
         self.assertTrue(self.server.call_tool("read_attachment", {"attachment_id": attachment})["isError"])
 
+    def test_rich_card_images_deduplicate_payload_versions(self):
+        """Extract authorized V2 images once and retain V1-only support for older rich-text cards."""
+        from PIL import Image
+        path = self.root / "inline.png"
+        Image.new("RGB", (1793, 105), "white").save(path)
+        old = {"items": [{"type": "img", "value": {"src": "mediaId://@fixture", "filename": path.name,
+                                                       "width": 1793, "height": 105}}]}
+        new = {"contents": [{"type": "markdown", "text": {"items": [
+            {"type": "image", "data": {"authMediaId": "$fixture", "url": "@fixture", "filename": path.name},
+             "style": {"width": 1793, "height": 105}}]}}]}
+        extra = {"payload": json.dumps(old), "payloadV2": json.dumps(new)}
+        body = {"attachments": [{"type": 3100, "extension": json.dumps(extra)}]}
+        record = {"id": "card", "conversation_id": "fixture", "text": json.dumps(body),
+                  "timestamp": datetime.now(timezone.utc).isoformat(), "source": "windows_native_history",
+                  "metadata": {"content_type": "3100"}}
+        self.store.ingest(record)
+        listing = self.server.call_tool("list_attachments", {"message_id": "card"})["structuredContent"]["attachments"]
+        self.assertEqual(len(listing), 1)
+        self.assertEqual(listing[0]["expected_dimensions"], [1793, 105])
+        result = self.read(listing[0]["attachment_id"])
+        self.assertEqual(result["content"][1]["type"], "image")
+        del extra["payloadV2"]
+        body["attachments"][0]["extension"] = json.dumps(extra)
+        self.store.connection.execute("UPDATE messages SET text=? WHERE id='card'", (json.dumps(body),))
+        self.store.connection.commit()
+        self.assertEqual(len(self.server.call_tool("list_attachments", {"message_id": "card"})["structuredContent"]["attachments"]), 1)
+
+    def test_group_folders_paginate_read_files_and_recheck_policy(self):
+        """Route 503/type-0 folders to listings and keep returned drive IDs scoped on every read."""
+        import msgpack
+        from docx import Document
+        self.store.bind_native_account("12345")
+        body = {"attachments": [{"type": 0, "extension": json.dumps({
+            "f_id": "folder", "s_id": "123", "f_name": "Folder", "f_count": "1"})}]}
+        self.store.ingest({"id": "folder-message", "conversation_id": "fixture", "text": json.dumps(body),
+                           "timestamp": datetime.now(timezone.utc).isoformat(), "source": "windows_native_history",
+                           "metadata": {"content_type": "503", "account_id": "12345", "native_message_id": "101"}})
+        document = Document()
+        document.add_paragraph("read from group folder")
+        document.save(self.root / "child.docx")
+        revision = "first"
+
+        def query(_store, operation, payload):
+            """Model verified CSpace wire shapes while requiring the account's group-space variant."""
+            if operation == "group-space":
+                unpacker = msgpack.Unpacker(raw=False)
+                unpacker.feed(payload)
+                self.assertEqual(list(unpacker), ["fixture", 2])
+                return 123
+            arguments = msgpack.unpackb(payload, raw=False, strict_map_key=False)
+            if arguments[5] == "0" and 1 not in arguments:
+                model = {1: "next-page", 2: 2, 3: [{1: "folder", 2: 0, 3: "/Folder/", 4: "Folder", 5: "folder"}], 5: True}
+            elif arguments[5] == "0":
+                self.assertEqual(arguments[1], "next-page")
+                model = {2: 2, 3: [{1: "second", 2: 2, 3: "/other.txt", 4: "other.txt", 5: "file"}], 5: False}
+            else:
+                self.assertEqual(arguments[5], "folder")
+                model = {2: 1, 3: [{1: "child", 2: 0, 3: "/Folder/child.docx", 4: "child.docx", 5: "file", 47: "other-id", 91: revision}], 5: False}
+            return {1: 0, 3: {1: model}}
+
+        folder = self.server.call_tool("list_attachments", {"message_id": "folder-message"})["structuredContent"]["attachments"][0]
+        self.assertEqual(folder["kind"], "directory")
+        self.assertFalse(folder["download_on_read"])
+        with patch("dingtalkbridge.group_files._rpc", side_effect=query):
+            first = self.server.call_tool("list_group_files", {"conversation_id": "fixture", "limit": 1})["structuredContent"]
+            second = self.server.call_tool("list_group_files", {"conversation_id": "fixture", "cursor": first["next_cursor"], "limit": 1})
+            self.assertFalse(second["structuredContent"]["has_more"])
+            drive_folder = first["files"][0]["attachment_id"]
+            children = self.read(drive_folder)["structuredContent"]["files"]
+            self.assertEqual(len(children), 1)
+            direct = self.read(folder["attachment_id"])["structuredContent"]["files"]
+            self.assertEqual(direct[0]["attachment_id"], children[0]["attachment_id"])
+            result = self.read(children[0]["attachment_id"], view="text")
+            from dingtalkbridge.attachments import resolve
+            before = resolve(self.store, children[0]["attachment_id"]).fingerprint()
+            revision = "changed-with-the-same-name-and-size"
+            self.read(drive_folder)
+            self.assertNotEqual(resolve(self.store, children[0]["attachment_id"]).fingerprint(), before)
+        self.assertIn("read from group folder", result["structuredContent"]["blocks"][0]["text"])
+        self.store.config = replace(self.config, excluded_conversations=("fixture",))
+        self.assertTrue(self.server.call_tool("read_attachment", {"attachment_id": children[0]["attachment_id"]})["isError"])
+
     def test_stdio_transmits_a_real_image_larger_than_the_text_response_limit(self):
         """Exercise all MCP envelopes with a binary image exceeding the old text-only ceiling."""
         from PIL import Image

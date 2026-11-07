@@ -78,7 +78,7 @@ def default_controller_path(*, synthetic: bool = False) -> Path:
     """Resolve the matching production or synthetic Controller executable."""
     flavor = "synthetic" if synthetic else "production"
     executable = "BridgeControllerSynthetic.exe" if synthetic else "BridgeController.exe"
-    return Path(__file__).resolve().parents[2] / "experimental" / "native-detour" / "bootstrap" / "bin" / "0.6.2" / flavor / executable
+    return Path(__file__).resolve().parents[2] / "experimental" / "native-detour" / "bootstrap" / "bin" / "0.6.3" / flavor / executable
 
 
 def _sha256(path: Path) -> str:

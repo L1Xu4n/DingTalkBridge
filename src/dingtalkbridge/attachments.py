@@ -79,13 +79,20 @@ class Attachment:
     timestamp_milliseconds: int
     width: int = 0
     height: int = 0
+    is_directory: bool = False
+    embedded: bool = False
+    revision: str = ""
 
     def public(self) -> dict[str, Any]:
         """Return metadata suitable for the model, excluding download credentials and paths."""
         result = {"attachment_id": self.id, "message_id": self.message_id, "name": self.name,
-                  "mime_type": self.mime_type, "size": self.size or None}
+                  "mime_type": self.mime_type, "size": self.size or None,
+                  "kind": "directory" if self.is_directory else "file"}
         if self.width and self.height:
             result["expected_dimensions"] = [self.width, self.height]
+        if not self.message_id:
+            del result["message_id"]
+            result["conversation_id"] = self.conversation_id
         return result
 
     def fingerprint(self) -> str:
@@ -93,6 +100,10 @@ class Attachment:
         identity = [self.media_id, self.file_id, self.space_id, self.name, self.size, self.local_path]
         if self.width and self.height:
             identity.extend([self.width, self.height])
+        if self.embedded or self.is_directory:
+            identity.extend([self.embedded, self.is_directory])
+        if self.revision:
+            identity.append(self.revision)
         return hashlib.sha256(json.dumps(identity, ensure_ascii=True).encode()).hexdigest()
 
 
@@ -109,6 +120,36 @@ def _message(store: Store, *, message_id: str | None = None, sequence: int | Non
     return row
 
 
+def _embedded_images(value: Any, depth: int = 0) -> list[dict[str, Any]]:
+    """Extract rich-text image nodes from both card payload versions with bounded nesting."""
+    if depth > 20:
+        return []
+    if isinstance(value, str):
+        value = _object(value)
+    if isinstance(value, list):
+        return [image for child in value for image in _embedded_images(child, depth + 1)]
+    if not isinstance(value, dict):
+        return []
+    if value.get("type") in ("img", "image"):
+        data = _object(value.get("data")) or _object(value.get("value"))
+        style = _object(value.get("style"))
+        source = _text(data.get("url")) or _text(data.get("src"))
+        media = _text(data.get("authMediaId")) or _text(data.get("mediaId"))
+        if source.lower().startswith("mediaid://"):
+            source = source.split("://", 1)[1]
+            if not source.startswith(("@", "$")):
+                source = "@" + source
+        if source.startswith(("@", "$")):
+            media = media or source
+        if media or source.startswith("https://"):
+            return [{**data, "mediaId": media, "url": source if source.startswith("https://") else "",
+                     "width": data.get("width") or style.get("width"),
+                     "height": data.get("height") or style.get("height"),
+                     "_source_media": source}]
+    return [image for key, child in value.items() if key != "fallback"
+            for image in _embedded_images(child, depth + 1)]
+
+
 def _catalog(row: Any) -> list[Attachment]:
     """Decode image and file locators, including JSON nested inside extension fields."""
     if row["source"] != "windows_native_history":
@@ -116,17 +157,28 @@ def _catalog(row: Any) -> list[Attachment]:
     body = _object(row["text"])
     metadata = _object(row["metadata"])
     candidates = []
-    if metadata.get("content_type") == "2" and (body.get("mediaId") or body.get("url")):
-        candidates.append((body, body))
+    embedded = []
+    if str(metadata.get("content_type")) == "2" and (body.get("mediaId") or body.get("url")):
+        candidates.append((body, body, False))
     for item in body.get("attachments", []) if isinstance(body.get("attachments"), list) else []:
         if not isinstance(item, dict):
             continue
         extra = _object(item.get("extension"))
         # Link cards also use attachments; only media or actual file identifiers qualify.
         if extra.get("f_id") or extra.get("mediaId") or item.get("mediaId") or item.get("filepath"):
-            candidates.append((item, extra))
+            candidates.append((item, extra, False))
+        # Prefer V2 because it carries the authorization ID for protected inline images.
+        embedded.extend(_embedded_images(extra.get("payloadV2")))
+        embedded.extend(_embedded_images(extra.get("payload")))
+    seen = set()
+    for image in embedded:
+        identity = image.get("_source_media") or image.get("mediaId")
+        if identity in seen:
+            continue
+        seen.add(identity)
+        candidates.append((image, image, True))
     result = []
-    for index, (item, extra) in enumerate(candidates):
+    for index, (item, extra, inline) in enumerate(candidates):
         name = _text(extra.get("f_name")) or _text(item.get("filename"))
         url = _text(item.get("url"))
         suffix = Path(parse.urlsplit(url).path).suffix if url.startswith("https://") else ""
@@ -135,7 +187,9 @@ def _catalog(row: Any) -> list[Attachment]:
             name = name[:200] + Path(name).suffix[:20]
         size = extra.get("f_size") or item.get("picSize") or item.get("size") or 0
         size = _positive_int(size)
-        mime = mimetypes.guess_type(name)[0] or "application/octet-stream"
+        directory = (str(metadata.get("content_type")) == "503" or str(item.get("type")) == "503"
+                     or extra.get("f_type") == "folder")
+        mime = "inode/directory" if directory else mimetypes.guess_type(name)[0] or "application/octet-stream"
         result.append(Attachment(
             id=f"att-{row['seq']}-{index}", message_id=row["id"], name=name, mime_type=mime, size=size,
             local_path=_text(item.get("filepath")), url=url,
@@ -145,12 +199,16 @@ def _catalog(row: Any) -> list[Attachment]:
             account_id=_text(metadata.get("account_id")), native_path=_text(extra.get("path")),
             timestamp_milliseconds=int(row["timestamp_epoch"] * 1000),
             width=_positive_int(item.get("width")), height=_positive_int(item.get("height")),
+            is_directory=directory, embedded=inline,
         ))
     return result
 
 
 def resolve(store: Store, attachment_id: str) -> Attachment:
     """Resolve an opaque archive attachment ID without accepting an arbitrary file or URL."""
+    if attachment_id.startswith("drive-"):
+        from .group_files import resolve_entry
+        return resolve_entry(store, attachment_id)
     match = re.fullmatch(r"att-([1-9][0-9]{0,18})-([0-9]{1,5})", attachment_id)
     if not match:
         raise AttachmentError("invalid_attachment_id")
@@ -268,7 +326,7 @@ def _client_download(store: Store, attachment: Attachment, destination: Path) ->
     account = store.native_account_id()
     if not (attachment.media_id or attachment.file_id and attachment.space_id) or not account or account != attachment.account_id:
         raise AttachmentError("attachment_requires_client_download")
-    if not re.fullmatch(r"[1-9][0-9]{0,18}", attachment.native_message_id):
+    if not attachment.id.startswith("drive-") and not re.fullmatch(r"[1-9][0-9]{0,18}", attachment.native_message_id):
         raise AttachmentError("attachment_native_message_id_unavailable")
     incoming = _directory(store, attachment) / ("incoming-" + attachment.fingerprint()[:16])
     incoming.mkdir(parents=True, exist_ok=True)
@@ -290,7 +348,18 @@ def _client_download(store: Store, attachment: Attachment, destination: Path) ->
                          "f_space_id_": attachment.space_id, "f_path_": attachment.native_path,
                          "dest_path_": str(incoming.resolve())}
             payload = account + "\n" + json.dumps([json.dumps(arguments, ensure_ascii=True)], ensure_ascii=True) + "\n"
-            if attachment.media_id and not attachment.file_id:
+            if attachment.id.startswith("drive-"):
+                fields = (account, "cloud-file", attachment.conversation_id,
+                          attachment.space_id, attachment.file_id, str(downloaded.resolve()), "")
+                if any(character in value for value in fields for character in "\r\n\0"):
+                    raise AttachmentError("attachment_download_locator_invalid")
+                payload = "\n".join(fields)
+            elif attachment.embedded:
+                fields = (account, "inline-media", attachment.media_id, str(downloaded.resolve()), "")
+                if any(character in value for value in fields for character in "\r\n\0"):
+                    raise AttachmentError("attachment_download_locator_invalid")
+                payload = "\n".join(fields)
+            elif attachment.media_id and not attachment.file_id:
                 payload = "\n".join((account, "media", attachment.conversation_id, attachment.native_message_id,
                                        str(downloaded.resolve()), str(attachment.timestamp_milliseconds), ""))
             if len(payload.encode()) > 32768:
@@ -302,7 +371,7 @@ def _client_download(store: Store, attachment: Attachment, destination: Path) ->
         deadline = time.monotonic() + timeout
         while not _download_complete(downloaded):
             if failed.exists():
-                raise AttachmentError("attachment_native_download_binding_unavailable")
+                raise AttachmentError("attachment_native_download_failed_check_access_and_native_version")
             if time.monotonic() >= deadline:
                 raise AttachmentError("attachment_download_pending_retry_read_attachment")
             time.sleep(0.25)
@@ -332,6 +401,8 @@ def cached_file(store: Store, attachment: Attachment) -> Path | None:
 
 def fetch(store: Store, attachment: Attachment) -> Path:
     """Cache complete local or downloaded bytes atomically, reusing them on later reads."""
+    if attachment.is_directory:
+        raise AttachmentError("attachment_is_directory_use_list_group_files")
     existing = cached_file(store, attachment)
     if existing:
         return existing
@@ -383,8 +454,10 @@ def list_attachments(store: Store, message_id: str) -> dict[str, Any]:
     items = []
     for attachment in _catalog(_message(store, message_id=message_id)):
         item = attachment.public()
-        item["availability"] = "cached" if cached_file(store, attachment) else "local" if _local_file(store, attachment) else "download_required"
+        item["availability"] = "directory" if attachment.is_directory else "cached" if cached_file(store, attachment) else "local" if _local_file(store, attachment) else "download_required"
         item["download_on_read"] = item["availability"] == "download_required"
+        if attachment.is_directory:
+            item["list_on_read"] = True
         items.append(item)
     return {"message_id": message_id, "attachments": items}
 
@@ -393,6 +466,16 @@ def read_attachment(store: Store, attachment_id: str, **options: Any) -> dict[st
     """Hold the cache during download/reading and refresh its retention timestamp on use."""
     from .attachment_readers import read
     attachment = resolve(store, attachment_id)
+    if attachment.is_directory:
+        from .group_files import list_group_files
+        if any(options.get(key) for key in ("pages", "sheet", "cell_range")) or options.get("view", "auto") != "auto":
+            raise AttachmentError("directory_requires_auto_view_and_cursor_pagination")
+        metadata = list_group_files(store, attachment.conversation_id, folder_id=attachment.id,
+                                    cursor=options.get("cursor"), limit=options.get("limit", 50))
+        return {"isError": False, "structuredContent": metadata,
+                "content": [{"type": "text", "text": json.dumps(metadata, ensure_ascii=False)}]}
+    if options.get("cursor") is not None:
+        Store._cursor(options["cursor"])
     directory = _directory(store, attachment)
     try:
         with cache_lock(directory):
