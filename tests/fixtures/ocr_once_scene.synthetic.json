@@ -1,0 +1,1015 @@
+{
+  "type": "scene",
+  "status": "no_safe_unmasked_region",
+  "capture_permitted": false,
+  "metadata_only": true,
+  "text_properties_read": false,
+  "capture_backend_policy": "toplevel_wgc_gpu_crop_and_redact_before_cpu_only",
+  "coordinate_space": "physical_screen_pixels",
+  "dpi_awareness": "per_monitor_v2",
+  "desktop_kind": "interactive_default",
+  "fixture_metadata": {
+    "synthetic": true,
+    "purpose": "Offline one-to-one technical proof and 3300-pixel mandatory-mask contract",
+    "system_identity": "All PIDs, handles, sessions, times and file paths are invented; no real account or text is present.",
+    "geometry": "Representative physical-pixel dimensions retained to test 4 by 825 pixel overlap."
+  },
+  "observed_at": "2000-01-01T00:00:00Z",
+  "candidate_scene": {
+    "toplevel": {
+      "hwnd": "a001",
+      "pid": 42000,
+      "native_class": "Qt51511QWindowIcon",
+      "verified_process_path": "C:\\SyntheticFixture\\DingTalk.exe",
+      "session_id": 7,
+      "visible": true,
+      "iconic": false,
+      "window_rect_screen": {
+        "x": 113,
+        "y": 93,
+        "width": 2229,
+        "height": 1134
+      },
+      "dwm_frame_rect_screen": {
+        "x": 113,
+        "y": 93,
+        "width": 2229,
+        "height": 1134
+      },
+      "dwm_frame_hresult": 0,
+      "dwm_cloak_hresult": 0,
+      "dwm_cloaked": 0,
+      "display_affinity_read_ok": true,
+      "display_affinity": 0,
+      "uia_class": "DtMainFrameView",
+      "framework_id": "Qt",
+      "control_type": "ControlType.Window",
+      "root_value_pattern": {
+        "supported": true,
+        "is_read_only": false,
+        "read_error": false
+      }
+    },
+    "selected_cef_hwnd": "a002",
+    "selected_semantic_hwnd": "a003",
+    "selected_cef_rect_screen": {
+      "x": 686,
+      "y": 233,
+      "width": 1638,
+      "height": 984
+    },
+    "selected_cef_native_class": "CefBrowserWindow",
+    "selected_semantic_rect_screen": {
+      "x": 686,
+      "y": 233,
+      "width": 1638,
+      "height": 984
+    },
+    "selected_semantic_native_class": "Qt51511QWindowIcon",
+    "selected_semantic_uia_class": "im_chat::DTIMChatComponent",
+    "message_roi_screen": {
+      "x": 686,
+      "y": 233,
+      "width": 1638,
+      "height": 825
+    },
+    "coverage": {
+      "uia_nodes": 117,
+      "msaa_nodes": 300,
+      "native_child_nodes": 11,
+      "provider_errors": 3,
+      "native_child_errors": 0,
+      "complete": false,
+      "node_budget": 1500,
+      "native_child_budget": 512
+    },
+    "calibration_gate": {
+      "schema_version": 1,
+      "technical_complete": false,
+      "technical_errors": [
+        {
+          "provider": "uia",
+          "geometry_error": true,
+          "error_ref": "geometry_error_6",
+          "error_category": "coordinates",
+          "error_code": "invalid_input_bbox",
+          "technical_error": true,
+          "strong_input": false,
+          "diagnostic_bbox": {
+            "x": -2147483648,
+            "y": -2147483648,
+            "width": 0,
+            "height": 0
+          },
+          "input_reason": "writable_value_pattern",
+          "class_name": "CovnTopAreaBar",
+          "control_type": "ControlType.Group",
+          "framework_id": "Qt",
+          "depth": 4,
+          "is_offscreen": false,
+          "native_owner_hwnd": "a004",
+          "owner_pid": 42000
+        },
+        {
+          "provider": "msaa",
+          "geometry_error": true,
+          "error_ref": "geometry_error_116",
+          "error_category": "owner_identity",
+          "error_code": "accessible_owner_not_in_verified_visible_scene",
+          "technical_error": true,
+          "native_owner_hwnd": "a005",
+          "owner_pid": 42000,
+          "pid_matches": true,
+          "path_matches": true,
+          "is_window": true,
+          "owner_visible": false,
+          "native_relation_matches": true
+        },
+        {
+          "provider": "msaa",
+          "geometry_error": true,
+          "error_ref": "geometry_error_118",
+          "error_category": "owner_identity",
+          "error_code": "accessible_owner_not_in_verified_visible_scene",
+          "technical_error": true,
+          "native_owner_hwnd": "a006",
+          "owner_pid": 42000,
+          "pid_matches": true,
+          "path_matches": true,
+          "is_window": true,
+          "owner_visible": false,
+          "native_relation_matches": true
+        }
+      ],
+      "known_strong_input_geometry_complete": false,
+      "known_strong_input_rects_screen": [
+        {
+          "x": 688,
+          "y": 1060,
+          "width": 1635,
+          "height": 156
+        },
+        {
+          "x": 808,
+          "y": 102,
+          "width": 840,
+          "height": 42
+        },
+        {
+          "x": 1122,
+          "y": 102,
+          "width": 256,
+          "height": 42
+        },
+        {
+          "x": 727,
+          "y": 1075,
+          "width": 1566,
+          "height": 52
+        }
+      ],
+      "semantic_incomplete": true,
+      "semantic_errors": [],
+      "semantic_error_codes": [
+        "unknown_semantic"
+      ],
+      "classified_provider_error_count": 3,
+      "unclassified_provider_error_count": 0,
+      "strict_provider_errors": 3,
+      "strict_masks_unchanged": true,
+      "capture_authorized": false
+    },
+    "outside_source_tree_ignored_count": 0,
+    "layout_whitelist_exemptions": 0,
+    "root_window_value_exception_applied": false,
+    "unknown_native_child_policy": "mask_entire_child_and_reject_scene",
+    "gpu_redaction_before_cpu_required": true,
+    "alternative_technical_evidence": {
+      "metadata_only": true,
+      "not_applied_to_strict_masks_or_gate": true,
+      "fresh_binding_verified": true,
+      "owners": [
+        {
+          "native_owner_hwnd": "a004",
+          "owner_pid": 42000,
+          "selected_pid_matches": true,
+          "image_path_matches": true,
+          "same_session": true,
+          "is_window": true,
+          "is_window_visible": true,
+          "is_top_or_child": true,
+          "native_class": "Qt51511QWindowIcon",
+          "style_hex": "56000000",
+          "ex_style_hex": "0",
+          "ws_visible": true,
+          "ws_child": true,
+          "ws_clipchildren": true,
+          "ws_clipsiblings": true,
+          "ws_ex_layered": false,
+          "ws_ex_transparent": false,
+          "gwr_call_succeeded": true,
+          "gwr_valid": true,
+          "native_bounds_nonnegative": true,
+          "proven_empty_native_bounds": false,
+          "window_rect_screen": {
+            "x": 326,
+            "y": 219,
+            "width": 356,
+            "height": 999
+          },
+          "dwm_hresult": -2147024890,
+          "dwm_frame_rect_screen": {
+            "x": 0,
+            "y": 0,
+            "width": 0,
+            "height": 0
+          },
+          "dwm_cloak_hresult": 0,
+          "dwm_cloaked": 0,
+          "window_roi_intersection_area": 0,
+          "candidate_superset_screen": {
+            "x": 326,
+            "y": 219,
+            "width": 356,
+            "height": 999
+          },
+          "candidate_superset_roi_intersection_area": 0,
+          "superset_padding_pixels": 8,
+          "padded_superset_screen": {
+            "x": 318,
+            "y": 211,
+            "width": 372,
+            "height": 1015
+          },
+          "padded_superset_roi_intersection_area": 3300,
+          "native_parent_client_clip_chain_complete": true,
+          "rgn_result": 0,
+          "rgn_box_result": 0,
+          "rgn_box_window_relative": {
+            "x": 0,
+            "y": 0,
+            "width": 0,
+            "height": 0
+          },
+          "rgn_used_to_shrink_mask": false,
+          "ancestor_chain": [
+            {
+              "hwnd": "a004",
+              "pid": 42000,
+              "native_class": "Qt51511QWindowIcon",
+              "is_window": true,
+              "image_path_matches": true,
+              "same_session": true,
+              "is_window_visible": true,
+              "ws_visible": true,
+              "ws_child": true,
+              "ws_ex_layered": false,
+              "ws_ex_transparent": false,
+              "bounds_valid": true,
+              "window_rect_screen": {
+                "x": 326,
+                "y": 219,
+                "width": 356,
+                "height": 999
+              },
+              "client_call_succeeded": true,
+              "client_bounds_valid": true,
+              "client_bounds_nonnegative": true,
+              "client_rect_screen": {
+                "x": 326,
+                "y": 219,
+                "width": 356,
+                "height": 999
+              },
+              "parent_hwnd": "a007",
+              "parent_is_real_native_parent": true,
+              "selected_top_relation": true
+            },
+            {
+              "hwnd": "a007",
+              "pid": 42000,
+              "native_class": "DingChatWnd",
+              "is_window": true,
+              "image_path_matches": true,
+              "same_session": true,
+              "is_window_visible": true,
+              "ws_visible": true,
+              "ws_child": true,
+              "ws_ex_layered": false,
+              "ws_ex_transparent": false,
+              "bounds_valid": true,
+              "window_rect_screen": {
+                "x": 326,
+                "y": 153,
+                "width": 2007,
+                "height": 1065
+              },
+              "client_call_succeeded": true,
+              "client_bounds_valid": true,
+              "client_bounds_nonnegative": true,
+              "client_rect_screen": {
+                "x": 326,
+                "y": 153,
+                "width": 2007,
+                "height": 1065
+              },
+              "parent_hwnd": "a001",
+              "parent_is_real_native_parent": true,
+              "selected_top_relation": true
+            },
+            {
+              "hwnd": "a001",
+              "pid": 42000,
+              "native_class": "Qt51511QWindowIcon",
+              "is_window": true,
+              "image_path_matches": true,
+              "same_session": true,
+              "is_window_visible": true,
+              "ws_visible": true,
+              "ws_child": false,
+              "ws_ex_layered": false,
+              "ws_ex_transparent": false,
+              "bounds_valid": true,
+              "window_rect_screen": {
+                "x": 113,
+                "y": 93,
+                "width": 2229,
+                "height": 1134
+              },
+              "client_call_succeeded": true,
+              "client_bounds_valid": true,
+              "client_bounds_nonnegative": true,
+              "client_rect_screen": {
+                "x": 113,
+                "y": 93,
+                "width": 2229,
+                "height": 1134
+              },
+              "parent_hwnd": "0",
+              "parent_is_real_native_parent": false,
+              "selected_top_relation": true
+            }
+          ],
+          "ancestor_chain_reached_selected_top": true,
+          "readonly_semantics_inferred": false,
+          "applied_as_override": false,
+          "resolves_error_refs": [
+            "geometry_error_6"
+          ],
+          "source_error_bindings": [
+            {
+              "provider": "uia",
+              "geometry_error": true,
+              "error_ref": "geometry_error_6",
+              "error_category": "coordinates",
+              "error_code": "invalid_input_bbox",
+              "technical_error": true,
+              "strong_input": false,
+              "diagnostic_bbox": {
+                "x": -2147483648,
+                "y": -2147483648,
+                "width": 0,
+                "height": 0
+              },
+              "input_reason": "writable_value_pattern",
+              "class_name": "CovnTopAreaBar",
+              "control_type": "ControlType.Group",
+              "framework_id": "Qt",
+              "depth": 4,
+              "is_offscreen": false,
+              "native_owner_hwnd": "a004",
+              "owner_pid": 42000
+            }
+          ]
+        },
+        {
+          "native_owner_hwnd": "a005",
+          "owner_pid": 42000,
+          "selected_pid_matches": true,
+          "image_path_matches": true,
+          "same_session": true,
+          "is_window": true,
+          "is_window_visible": false,
+          "is_top_or_child": true,
+          "native_class": "Qt51511QWindowIcon",
+          "style_hex": "46000000",
+          "ex_style_hex": "0",
+          "ws_visible": false,
+          "ws_child": true,
+          "ws_clipchildren": true,
+          "ws_clipsiblings": true,
+          "ws_ex_layered": false,
+          "ws_ex_transparent": false,
+          "gwr_call_succeeded": true,
+          "gwr_valid": false,
+          "native_bounds_nonnegative": true,
+          "proven_empty_native_bounds": true,
+          "window_rect_screen": {
+            "x": 326,
+            "y": 153,
+            "width": 0,
+            "height": 0
+          },
+          "dwm_hresult": -2147024890,
+          "dwm_frame_rect_screen": {
+            "x": 0,
+            "y": 0,
+            "width": 0,
+            "height": 0
+          },
+          "dwm_cloak_hresult": 0,
+          "dwm_cloaked": 0,
+          "window_roi_intersection_area": -1,
+          "candidate_superset_screen": {
+            "x": 326,
+            "y": 153,
+            "width": 0,
+            "height": 0
+          },
+          "candidate_superset_roi_intersection_area": -1,
+          "superset_padding_pixels": 8,
+          "padded_superset_screen": {
+            "x": 318,
+            "y": 145,
+            "width": 16,
+            "height": 16
+          },
+          "padded_superset_roi_intersection_area": 0,
+          "native_parent_client_clip_chain_complete": true,
+          "rgn_result": 0,
+          "rgn_box_result": 0,
+          "rgn_box_window_relative": {
+            "x": 0,
+            "y": 0,
+            "width": 0,
+            "height": 0
+          },
+          "rgn_used_to_shrink_mask": false,
+          "ancestor_chain": [
+            {
+              "hwnd": "a005",
+              "pid": 42000,
+              "native_class": "Qt51511QWindowIcon",
+              "is_window": true,
+              "image_path_matches": true,
+              "same_session": true,
+              "is_window_visible": false,
+              "ws_visible": false,
+              "ws_child": true,
+              "ws_ex_layered": false,
+              "ws_ex_transparent": false,
+              "bounds_valid": false,
+              "window_rect_screen": {
+                "x": 326,
+                "y": 153,
+                "width": 0,
+                "height": 0
+              },
+              "client_call_succeeded": true,
+              "client_bounds_valid": false,
+              "client_bounds_nonnegative": true,
+              "client_rect_screen": {
+                "x": 326,
+                "y": 153,
+                "width": 0,
+                "height": 0
+              },
+              "parent_hwnd": "a007",
+              "parent_is_real_native_parent": true,
+              "selected_top_relation": true
+            },
+            {
+              "hwnd": "a007",
+              "pid": 42000,
+              "native_class": "DingChatWnd",
+              "is_window": true,
+              "image_path_matches": true,
+              "same_session": true,
+              "is_window_visible": true,
+              "ws_visible": true,
+              "ws_child": true,
+              "ws_ex_layered": false,
+              "ws_ex_transparent": false,
+              "bounds_valid": true,
+              "window_rect_screen": {
+                "x": 326,
+                "y": 153,
+                "width": 2007,
+                "height": 1065
+              },
+              "client_call_succeeded": true,
+              "client_bounds_valid": true,
+              "client_bounds_nonnegative": true,
+              "client_rect_screen": {
+                "x": 326,
+                "y": 153,
+                "width": 2007,
+                "height": 1065
+              },
+              "parent_hwnd": "a001",
+              "parent_is_real_native_parent": true,
+              "selected_top_relation": true
+            },
+            {
+              "hwnd": "a001",
+              "pid": 42000,
+              "native_class": "Qt51511QWindowIcon",
+              "is_window": true,
+              "image_path_matches": true,
+              "same_session": true,
+              "is_window_visible": true,
+              "ws_visible": true,
+              "ws_child": false,
+              "ws_ex_layered": false,
+              "ws_ex_transparent": false,
+              "bounds_valid": true,
+              "window_rect_screen": {
+                "x": 113,
+                "y": 93,
+                "width": 2229,
+                "height": 1134
+              },
+              "client_call_succeeded": true,
+              "client_bounds_valid": true,
+              "client_bounds_nonnegative": true,
+              "client_rect_screen": {
+                "x": 113,
+                "y": 93,
+                "width": 2229,
+                "height": 1134
+              },
+              "parent_hwnd": "0",
+              "parent_is_real_native_parent": false,
+              "selected_top_relation": true
+            }
+          ],
+          "ancestor_chain_reached_selected_top": true,
+          "readonly_semantics_inferred": false,
+          "applied_as_override": false,
+          "resolves_error_refs": [
+            "geometry_error_116"
+          ],
+          "source_error_bindings": [
+            {
+              "provider": "msaa",
+              "geometry_error": true,
+              "error_ref": "geometry_error_116",
+              "error_category": "owner_identity",
+              "error_code": "accessible_owner_not_in_verified_visible_scene",
+              "technical_error": true,
+              "native_owner_hwnd": "a005",
+              "owner_pid": 42000,
+              "pid_matches": true,
+              "path_matches": true,
+              "is_window": true,
+              "owner_visible": false,
+              "native_relation_matches": true
+            }
+          ]
+        },
+        {
+          "native_owner_hwnd": "a006",
+          "owner_pid": 42000,
+          "selected_pid_matches": true,
+          "image_path_matches": true,
+          "same_session": true,
+          "is_window": true,
+          "is_window_visible": false,
+          "is_top_or_child": true,
+          "native_class": "CefBrowserWindow",
+          "style_hex": "46010000",
+          "ex_style_hex": "0",
+          "ws_visible": false,
+          "ws_child": true,
+          "ws_clipchildren": true,
+          "ws_clipsiblings": true,
+          "ws_ex_layered": false,
+          "ws_ex_transparent": false,
+          "gwr_call_succeeded": true,
+          "gwr_valid": true,
+          "native_bounds_nonnegative": true,
+          "proven_empty_native_bounds": false,
+          "window_rect_screen": {
+            "x": 326,
+            "y": 153,
+            "width": 2,
+            "height": 2
+          },
+          "dwm_hresult": -2147024890,
+          "dwm_frame_rect_screen": {
+            "x": 0,
+            "y": 0,
+            "width": 0,
+            "height": 0
+          },
+          "dwm_cloak_hresult": 0,
+          "dwm_cloaked": 0,
+          "window_roi_intersection_area": 0,
+          "candidate_superset_screen": {
+            "x": 326,
+            "y": 153,
+            "width": 2,
+            "height": 2
+          },
+          "candidate_superset_roi_intersection_area": 0,
+          "superset_padding_pixels": 8,
+          "padded_superset_screen": {
+            "x": 318,
+            "y": 145,
+            "width": 18,
+            "height": 18
+          },
+          "padded_superset_roi_intersection_area": 0,
+          "native_parent_client_clip_chain_complete": true,
+          "rgn_result": 0,
+          "rgn_box_result": 0,
+          "rgn_box_window_relative": {
+            "x": 0,
+            "y": 0,
+            "width": 0,
+            "height": 0
+          },
+          "rgn_used_to_shrink_mask": false,
+          "ancestor_chain": [
+            {
+              "hwnd": "a006",
+              "pid": 42000,
+              "native_class": "CefBrowserWindow",
+              "is_window": true,
+              "image_path_matches": true,
+              "same_session": true,
+              "is_window_visible": false,
+              "ws_visible": false,
+              "ws_child": true,
+              "ws_ex_layered": false,
+              "ws_ex_transparent": false,
+              "bounds_valid": true,
+              "window_rect_screen": {
+                "x": 326,
+                "y": 153,
+                "width": 2,
+                "height": 2
+              },
+              "client_call_succeeded": true,
+              "client_bounds_valid": true,
+              "client_bounds_nonnegative": true,
+              "client_rect_screen": {
+                "x": 326,
+                "y": 153,
+                "width": 2,
+                "height": 2
+              },
+              "parent_hwnd": "a007",
+              "parent_is_real_native_parent": true,
+              "selected_top_relation": true
+            },
+            {
+              "hwnd": "a007",
+              "pid": 42000,
+              "native_class": "DingChatWnd",
+              "is_window": true,
+              "image_path_matches": true,
+              "same_session": true,
+              "is_window_visible": true,
+              "ws_visible": true,
+              "ws_child": true,
+              "ws_ex_layered": false,
+              "ws_ex_transparent": false,
+              "bounds_valid": true,
+              "window_rect_screen": {
+                "x": 326,
+                "y": 153,
+                "width": 2007,
+                "height": 1065
+              },
+              "client_call_succeeded": true,
+              "client_bounds_valid": true,
+              "client_bounds_nonnegative": true,
+              "client_rect_screen": {
+                "x": 326,
+                "y": 153,
+                "width": 2007,
+                "height": 1065
+              },
+              "parent_hwnd": "a001",
+              "parent_is_real_native_parent": true,
+              "selected_top_relation": true
+            },
+            {
+              "hwnd": "a001",
+              "pid": 42000,
+              "native_class": "Qt51511QWindowIcon",
+              "is_window": true,
+              "image_path_matches": true,
+              "same_session": true,
+              "is_window_visible": true,
+              "ws_visible": true,
+              "ws_child": false,
+              "ws_ex_layered": false,
+              "ws_ex_transparent": false,
+              "bounds_valid": true,
+              "window_rect_screen": {
+                "x": 113,
+                "y": 93,
+                "width": 2229,
+                "height": 1134
+              },
+              "client_call_succeeded": true,
+              "client_bounds_valid": true,
+              "client_bounds_nonnegative": true,
+              "client_rect_screen": {
+                "x": 113,
+                "y": 93,
+                "width": 2229,
+                "height": 1134
+              },
+              "parent_hwnd": "0",
+              "parent_is_real_native_parent": false,
+              "selected_top_relation": true
+            }
+          ],
+          "ancestor_chain_reached_selected_top": true,
+          "readonly_semantics_inferred": false,
+          "applied_as_override": false,
+          "resolves_error_refs": [
+            "geometry_error_118"
+          ],
+          "source_error_bindings": [
+            {
+              "provider": "msaa",
+              "geometry_error": true,
+              "error_ref": "geometry_error_118",
+              "error_category": "owner_identity",
+              "error_code": "accessible_owner_not_in_verified_visible_scene",
+              "technical_error": true,
+              "native_owner_hwnd": "a006",
+              "owner_pid": 42000,
+              "pid_matches": true,
+              "path_matches": true,
+              "is_window": true,
+              "owner_visible": false,
+              "native_relation_matches": true
+            }
+          ]
+        }
+      ],
+      "known_strong_input_proof": [
+        {
+          "provider": "uia",
+          "reason": "input_marker",
+          "decision": "mask",
+          "control_type": "ControlType.Group",
+          "class_name": "QWidget",
+          "framework_id": "Qt",
+          "depth": 7,
+          "rect": {
+            "x": 688,
+            "y": 1060,
+            "width": 1635,
+            "height": 156
+          },
+          "is_offscreen": false,
+          "source_scan": true,
+          "native_owner_hwnd": "a003",
+          "owner_pid": 42000,
+          "owner_evidence": "verified_raw_ancestor",
+          "technical_bbox_owner_valid": true,
+          "roi_intersection_area": 0
+        },
+        {
+          "provider": "uia",
+          "reason": "input_marker",
+          "decision": "mask",
+          "control_type": "ControlType.Group",
+          "class_name": "client_ding::SearchBarView",
+          "framework_id": "Qt",
+          "depth": 5,
+          "rect": {
+            "x": 808,
+            "y": 102,
+            "width": 840,
+            "height": 42
+          },
+          "is_offscreen": false,
+          "source_scan": true,
+          "native_owner_hwnd": "a001",
+          "owner_pid": 42000,
+          "owner_evidence": "verified_raw_ancestor",
+          "technical_bbox_owner_valid": true,
+          "roi_intersection_area": 0
+        },
+        {
+          "provider": "msaa",
+          "role": 42,
+          "protected": false,
+          "depth": 6,
+          "rect": {
+            "x": 1122,
+            "y": 102,
+            "width": 256,
+            "height": 42
+          },
+          "native_owner_hwnd": "a001",
+          "owner_pid": 42000,
+          "owner_class": "Qt51511QWindowIcon",
+          "owner_evidence": "msaa_window_from_accessible_object",
+          "owner_visible": true,
+          "source_scan": false,
+          "technical_bbox_owner_valid": true,
+          "roi_intersection_area": 0
+        },
+        {
+          "provider": "msaa",
+          "role": 42,
+          "protected": false,
+          "depth": 14,
+          "rect": {
+            "x": 727,
+            "y": 1075,
+            "width": 1566,
+            "height": 52
+          },
+          "native_owner_hwnd": "a003",
+          "owner_pid": 42000,
+          "owner_class": "Qt51511QWindowIcon",
+          "owner_evidence": "msaa_window_from_accessible_object",
+          "owner_visible": true,
+          "source_scan": false,
+          "technical_bbox_owner_valid": true,
+          "roi_intersection_area": 0
+        }
+      ],
+      "known_strong_input_geometry_complete": true,
+      "superset_padding_pixels": 8,
+      "capture_authorized": false
+    },
+    "masks": [
+      {
+        "provider": "uia",
+        "reason": "writable_value_pattern",
+        "decision": "mask",
+        "control_type": "ControlType.Window",
+        "class_name": "DtMainFrameView",
+        "framework_id": "Qt",
+        "depth": 0,
+        "rect": {
+          "x": 112,
+          "y": 93,
+          "width": 2229,
+          "height": 1134
+        },
+        "is_offscreen": false,
+        "source_scan": true,
+        "native_owner_hwnd": "a001",
+        "owner_pid": 42000,
+        "owner_evidence": "explicit_native_handle",
+        "roi_intersection_area": 1351350
+      }
+    ],
+    "input_geometry_evidence": [
+      {
+        "provider": "uia",
+        "geometry_error": true,
+        "error_ref": "geometry_error_6",
+        "error_category": "coordinates",
+        "error_code": "invalid_input_bbox",
+        "technical_error": true,
+        "strong_input": false,
+        "diagnostic_bbox": {
+          "x": -2147483648,
+          "y": -2147483648,
+          "width": 0,
+          "height": 0
+        },
+        "input_reason": "writable_value_pattern",
+        "class_name": "CovnTopAreaBar",
+        "control_type": "ControlType.Group",
+        "framework_id": "Qt",
+        "depth": 4,
+        "is_offscreen": false,
+        "native_owner_hwnd": "a004",
+        "owner_pid": 42000
+      },
+      {
+        "provider": "msaa",
+        "geometry_error": true,
+        "error_ref": "geometry_error_116",
+        "error_category": "owner_identity",
+        "error_code": "accessible_owner_not_in_verified_visible_scene",
+        "technical_error": true,
+        "native_owner_hwnd": "a005",
+        "owner_pid": 42000,
+        "pid_matches": true,
+        "path_matches": true,
+        "is_window": true,
+        "owner_visible": false,
+        "native_relation_matches": true
+      },
+      {
+        "provider": "msaa",
+        "geometry_error": true,
+        "error_ref": "geometry_error_118",
+        "error_category": "owner_identity",
+        "error_code": "accessible_owner_not_in_verified_visible_scene",
+        "technical_error": true,
+        "native_owner_hwnd": "a006",
+        "owner_pid": 42000,
+        "pid_matches": true,
+        "path_matches": true,
+        "is_window": true,
+        "owner_visible": false,
+        "native_relation_matches": true
+      },
+      {
+        "provider": "uia",
+        "reason": "input_marker",
+        "decision": "mask",
+        "control_type": "ControlType.Group",
+        "class_name": "QWidget",
+        "framework_id": "Qt",
+        "depth": 7,
+        "rect": {
+          "x": 688,
+          "y": 1060,
+          "width": 1635,
+          "height": 156
+        },
+        "is_offscreen": false,
+        "source_scan": true,
+        "native_owner_hwnd": "a003",
+        "owner_pid": 42000,
+        "owner_evidence": "verified_raw_ancestor",
+        "technical_bbox_owner_valid": true,
+        "roi_intersection_area": 0
+      },
+      {
+        "provider": "uia",
+        "reason": "input_marker",
+        "decision": "mask",
+        "control_type": "ControlType.Group",
+        "class_name": "client_ding::SearchBarView",
+        "framework_id": "Qt",
+        "depth": 5,
+        "rect": {
+          "x": 808,
+          "y": 102,
+          "width": 840,
+          "height": 42
+        },
+        "is_offscreen": false,
+        "source_scan": true,
+        "native_owner_hwnd": "a001",
+        "owner_pid": 42000,
+        "owner_evidence": "verified_raw_ancestor",
+        "technical_bbox_owner_valid": true,
+        "roi_intersection_area": 0
+      },
+      {
+        "provider": "msaa",
+        "role": 42,
+        "protected": false,
+        "depth": 6,
+        "rect": {
+          "x": 1122,
+          "y": 102,
+          "width": 256,
+          "height": 42
+        },
+        "native_owner_hwnd": "a001",
+        "owner_pid": 42000,
+        "owner_class": "Qt51511QWindowIcon",
+        "owner_evidence": "msaa_window_from_accessible_object",
+        "owner_visible": true,
+        "source_scan": false,
+        "technical_bbox_owner_valid": true,
+        "roi_intersection_area": 0
+      },
+      {
+        "provider": "msaa",
+        "role": 42,
+        "protected": false,
+        "depth": 14,
+        "rect": {
+          "x": 727,
+          "y": 1075,
+          "width": 1566,
+          "height": 52
+        },
+        "native_owner_hwnd": "a003",
+        "owner_pid": 42000,
+        "owner_class": "Qt51511QWindowIcon",
+        "owner_evidence": "msaa_window_from_accessible_object",
+        "owner_visible": true,
+        "source_scan": false,
+        "technical_bbox_owner_valid": true,
+        "roi_intersection_area": 0
+      }
+    ],
+    "mask_coverage": {
+      "mask_count": 1,
+      "roi_area": 1351350,
+      "masked_union_area": 1351350,
+      "unmasked_area": 0
+    }
+  }
+}

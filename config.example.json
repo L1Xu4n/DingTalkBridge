@@ -1,0 +1,7 @@
+{
+  "data_dir": "%LOCALAPPDATA%\\DingTalkBridge",
+  "allowed_conversations": [],
+  "excluded_conversations": [],
+  "retention_days": 30,
+  "max_tool_results": 100
+}

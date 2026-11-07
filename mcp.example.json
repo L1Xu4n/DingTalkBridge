@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "dingtalkbridge": {
+      "command": "python",
+      "args": ["-m", "dingtalkbridge", "serve"],
+      "env": {
+        "PYTHONPATH": "C:\\path\\to\\DingTalkBridge\\src",
+        "PYTHONUTF8": "1",
+        "DINGTALKBRIDGE_CONFIG": "C:\\path\\to\\DingTalkBridge\\config.local.json"
+      }
+    }
+  }
+}

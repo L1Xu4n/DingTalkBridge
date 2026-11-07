@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dingtalkbridge"
+version = "0.3.0"
+description = "Local, read-only DingTalk archive and dependency-free MCP stdio bridge"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+dingtalkbridge = "dingtalkbridge.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.data-files]
+"share/dingtalkbridge/native" = ["native/DingTalkUia.cs"]
+"share/dingtalkbridge/ocr" = ["experimental/ocr/Capture-Ocr.ps1", "experimental/ocr/LocalOcr.ps1", "experimental/ocr/SafeWindowCrop.cs"]

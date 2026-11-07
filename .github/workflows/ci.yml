@@ -1,0 +1,27 @@
+name: Checks
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  python-and-build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test local core and native adapter
+        shell: pwsh
+        run: |
+          $env:PYTHONPATH = 'src'
+          python -m unittest discover -s tests -p 'test_core.py' -q
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m unittest discover -s tests -p 'test_native*.py' -q
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m unittest discover -s tests -p 'test_acceptance.py' -q
+          exit $LASTEXITCODE
+      - name: Compile native code against the owned fixture
+        shell: pwsh
+        run: ./experimental/native-detour/bootstrap/Build.ps1 -Target synthetic -SyntheticCore root
