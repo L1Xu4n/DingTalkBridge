@@ -136,4 +136,5 @@
 - 使用 humanizer 技能整理 README、开发说明、查询和附件文档，增加 `docs/CHANGES_0.6.md`。修正 XLS、CSV、缓存命名和 OCR 的旧描述，将验证记录中的具体群聊和文件用途改为通用样例。
 - 现有核心 39 项、原生适配 40 项、CLI/MCP 验收 1 项、附件 9 项，共 89 项测试通过。此次同步只复跑已有相关测试，实机能力沿用各功能阶段的核验记录。
 - 公开候选按 Git 文件清单核对，私人配置、消息库、附件缓存、运行报告及编译产物由忽略规则隔离。新增源码函数已有用途注释，查询和附件文档保留逐函数说明。
-- 本地与 `origin/main` 起点一致，准备通过 SSH 443 提交推送，随后核对 GitHub CI。Personal agent 的实现仍记录为待办。
+- 35 个修改或新增文件已通过 SSH 443 推送到 `main`，功能提交为 `ab7d9cb`。GitHub [Checks #42362214287](https://github.com/L1Xu4n/DingTalkBridge/actions/runs/42362214287) 通过，覆盖上述 89 项测试和原生 fixture 编译。Personal agent 的实现仍记录为待办。
+- 本次公开源码共 131 个文件。随后仅同步发布记录，文档提交使用 `[skip ci]`。
