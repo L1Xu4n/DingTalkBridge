@@ -13,17 +13,17 @@ git clone https://github.com/L1Xu4n/DingTalkBridge.git
 cd DingTalkBridge
 Copy-Item config.example.json config.local.json
 .\scripts\Build-Native.ps1
-.\scripts\Start-Native.ps1
+.\scripts\Write-McpConfig.ps1
 ```
 
-查看状态或停止采集：
+MCP 客户端连接时会自动启动采集，已运行的采集器会直接复用。查看状态或手动停止：
 
 ```powershell
 .\scripts\Bridge.ps1 status
 .\scripts\Stop-Native.ps1
 ```
 
-钉钉重启后，需要重新启动采集。更新程序前请完整退出钉钉。
+钉钉还没打开时，采集器会等待。钉钉退出后可重连 MCP 恢复采集。更新程序前请完整退出钉钉。
 
 消息保存在本机，默认保留 30 天，时间按采集时间记录。配置在 `config.local.json`；切换钉钉账号时，请先停止采集并换用独立的 `data_dir`。
 
@@ -33,7 +33,7 @@ Copy-Item config.example.json config.local.json
 .\scripts\Write-McpConfig.ps1
 ```
 
-将生成的 `mcp.local.json` 中的配置加入你的 MCP 客户端即可。采集程序需要保持运行。
+将生成的 `mcp.local.json` 中的配置加入你的 MCP 客户端即可，无需另外启动采集脚本。
 
 提供会话列表、消息读取、关键词搜索、前后文查询和增量消息接口。
 

@@ -31,7 +31,8 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--demo-data", action="store_true", help="Use the separate synthetic demo database for status/serve")
     commands = result.add_subparsers(dest="command", required=True)
     commands.add_parser("status", help="Print local bridge status")
-    commands.add_parser("serve", help="Run read-only MCP over stdio; stdout is protocol-only")
+    server = commands.add_parser("serve", help="Run MCP over stdio and start the message collector")
+    server.add_argument("--no-collector", action="store_true", help="Read the archive without starting collection")
     importer = commands.add_parser("import-jsonl", help="Read a selected local normalized JSONL file into the bridge database")
     importer.add_argument("path", type=Path)
     commands.add_parser("demo", help="Create synthetic records only in the separate demo database")
@@ -130,6 +131,12 @@ def main(argv: list[str] | None = None) -> int:
             if arguments.command == "status":
                 _print(store.status())
             elif arguments.command == "serve":
+                if not arguments.no_collector and store.dataset_kind != "synthetic":
+                    from .autostart import ensure_collector
+                    try:
+                        ensure_collector(config)
+                    except (OSError, ValueError):
+                        print("DingTalkBridge: collector unavailable; check native build and local paths. Archive tools remain available.", file=sys.stderr)
                 from .mcp import serve
                 serve(store)
             elif arguments.command == "import-jsonl":

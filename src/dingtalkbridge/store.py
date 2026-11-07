@@ -239,7 +239,7 @@ class Store:
                                        "native_callback_verified": False}
             observation = result.get("status")
             summary["last_observation_status"] = observation if isinstance(observation, str) and observation in {
-                "starting", "available", "no_visible_window", "process_not_running",
+                "starting", "available", "waiting_for_client", "no_visible_window", "process_not_running",
                 "collector_error", "stopped", "unavailable", "unsupported", "isolated_desktop",
                 "unsafe_geometry", "blank_capture", "capture_unavailable", "ocr_unavailable",
                 "no_text", "target_changed", "dpi_unavailable", "completed", "rejected", "cancelled", "failed"

@@ -322,11 +322,13 @@ def _consume_frame(config: Config, store: Store, frame: dict[str, Any], *, synth
     return consume_events(config, store, [payload])
 
 
-def _acquire_lock(config: Config) -> Any:
-    """Hold a Windows byte lock so two collectors cannot own one data directory."""
+def _acquire_lock(config: Config, name: str = "native-collector.lock") -> Any:
+    """Hold a collector or startup byte lock; lock files do not survive as live owners."""
     import msvcrt
+    if name not in {"native-collector.lock", "native-autostart.lock"}:
+        raise _fail("invalid_lock_name")
     config.data_dir.mkdir(parents=True, exist_ok=True)
-    handle = (config.data_dir / "native-collector.lock").open("a+b")
+    handle = (config.data_dir / name).open("a+b")
     try:
         if handle.tell() == 0:
             handle.write(b"0")
@@ -354,7 +356,8 @@ def run_collect(config: Config, store: Store, args: Any = None) -> dict[str, Any
     _validate_build(path, synthetic=synthetic)
     ownership = _acquire_lock(config)
     stop_path = config.data_dir / "native-stop.request"
-    stop_path.unlink(missing_ok=True)
+    if not _option(args, "preserve_stop_request", False):
+        stop_path.unlink(missing_ok=True)
     command = [str(path), "--pid", str(pid), "--hwnd", str(hwnd), "--duration", str(duration),
                "--session", session, "--mode", mode]
     if mode == "capture":
