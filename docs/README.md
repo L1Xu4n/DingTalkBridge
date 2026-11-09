@@ -45,7 +45,9 @@ AI 如何选择会话、日期、关键词、发送者与消息类型，见 [QUE
 | `autostart._locked` | 探测系统锁，区分正在运行的进程和遗留锁文件。 |
 | `autostart._settings` | 将实际数据库、路径及过滤配置通过私有 stdin 传给子进程。 |
 | `autostart.ensure_collector` | 复用现有采集器，或隐藏启动一个等待/采集进程，不占用 MCP 标准输出。 |
-| `autostart.run_worker` | 等待钉钉窗口，启动采集，并响应停止请求。 |
+| `autostart.maintain_collector` | MCP 连接期间每 5 秒检查后台进程，恢复已退出的 worker，尊重手动停止请求。 |
+| 内部 `ensure` / `watch` | 分别执行带固定诊断的启动检查，以及可随 MCP 结束的后台检查循环。 |
+| `autostart.run_worker` | 等待钉钉窗口，客户端重开后恢复采集，原生拒绝时等待新的客户端进程。 |
 | `autostart.main` | 读取有大小限制的启动配置，运行后台采集入口。 |
 | `native_controller._acquire_lock` | 分别管理采集锁和自动启动锁，阻止并发重复实例。 |
 | `native_controller.run_collect` | 自动启动路径保留已有停止请求，避免停止与启动竞争。 |
@@ -53,3 +55,5 @@ AI 如何选择会话、日期、关键词、发送者与消息类型，见 [QUE
 | `Store._collector_status` | 向 MCP 状态展示采集器正在等待钉钉窗口的状态。 |
 
 `tests/test_native_autostart.py` 分别检查复用、配置与管道隔离、等待后启动、等待时停止、默认/禁用路径及启动失败后的 MCP 可用性。
+
+0.6.4 增加采集恢复及手动停止回归检查。原生 MinHook 安装在确认尚未移动线程指令指针、尚未写入补丁且所有暂停线程已恢复时，对线程列表变化最多尝试三轮。原生初始化的具体错误码会保留在 `native_controller_counts.error`，需要客户端重启时返回 `requires_client_restart=true`。`graceful_stop` 只说明 Controller 的退出过程。

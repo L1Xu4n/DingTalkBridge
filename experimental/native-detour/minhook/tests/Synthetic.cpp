@@ -28,6 +28,7 @@ static bool Check(bool ok,const char *what) {
     if(!ok) std::fprintf(stderr,"assertion: %s\n",what);
     return ok;
 }
+// Exercise the selected owned-process hook scenario and check cleanup and forwarding.
 int main(int argc,char**argv) {
     if(argc!=2) return 2;
     const char *name=argv[1];
@@ -94,6 +95,7 @@ int main(int argc,char**argv) {
     else if(!std::strcmp(name,"flush")) { op=MH_TEST_FLUSH; expected=MH_ERROR_CACHE_FLUSH; }
     else if(!std::strcmp(name,"snapshot-first")) { op=MH_TEST_SNAPSHOT; expected=MH_ERROR_THREAD_ENUM; expectPatch=false; }
     else if(!std::strcmp(name,"snapshot-second")) { op=MH_TEST_SNAPSHOT; nth=2; expected=MH_ERROR_THREAD_ENUM; expectPatch=false; }
+    else if(!std::strcmp(name,"thread-churn")) { op=MH_TEST_THREAD_SET; }
     MH_TestSetFault(op,nth);
 #endif
     if(!std::strcmp(name,"target-changed") || changedContext) {
@@ -110,6 +112,7 @@ int main(int argc,char**argv) {
     if(changedContext) ok=Check(d.contexts_moved==0,"entry conflict rejected before moving RIP") && ok;
     if(!expectPatch) ok=Check(std::memcmp(entry,setCase?loop:normal,5)==0,"entry unchanged") && ok;
 #ifdef MH_STRICT_TEST
+    if(!std::strcmp(name,"thread-churn")) ok=Check(MH_TestCalls(MH_TEST_THREAD_SET)==2,"pre-patch churn retried after resume") && ok;
     if(setCase && !changedContext) ok=Check(MH_TestCalls(MH_TEST_SET_CONTEXT)>=2 && d.contexts_moved>=1,"partial real context relocation exercised") && ok;
     if(persistent) {
         ok=Check(d.pending_resume>=3,"retained failed handles") && ok;

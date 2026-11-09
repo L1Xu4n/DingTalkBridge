@@ -336,6 +336,7 @@ class CoreTest(unittest.TestCase):
                 self.assertNotIn("PRIVATE BODY", json.dumps(collector))
 
     def test_collector_status_is_scoped_fresh_bounded_and_allowlisted(self):
+        """Expose fresh scoped state and fixed recovery guidance while rejecting private fields."""
         path = self.directory / "collector-status.json"
         db_hash = hashlib.sha256(str(self.store.path.resolve()).casefold().encode("utf-8")).hexdigest()
         status = {"status": "available", "database_path_hash": db_hash, "running": True,
@@ -354,6 +355,13 @@ class CoreTest(unittest.TestCase):
         collector = self.store.status()["collector"]
         self.assertEqual(collector["status"], "stale")
         self.assertFalse(collector["running"])
+        status.update(status="failed", running=False, requires_client_restart=True,
+                      recovery_state="waiting_for_client_restart", failure_reason="controller_rejected")
+        path.write_text(json.dumps(status), encoding="utf-8")
+        collector = self.store.status()["collector"]
+        self.assertTrue(collector["requires_client_restart"])
+        self.assertEqual(collector["failure_reason"], "controller_rejected")
+        self.assertEqual(collector["recovery_state"], "waiting_for_client_restart")
         status["database_path_hash"] = "other-db"
         path.write_text(json.dumps(status), encoding="utf-8")
         self.assertEqual(self.store.status()["collector"]["status"], "not_applicable")

@@ -78,7 +78,7 @@ def default_controller_path(*, synthetic: bool = False) -> Path:
     """Resolve the matching production or synthetic Controller executable."""
     flavor = "synthetic" if synthetic else "production"
     executable = "BridgeControllerSynthetic.exe" if synthetic else "BridgeController.exe"
-    return Path(__file__).resolve().parents[2] / "experimental" / "native-detour" / "bootstrap" / "bin" / "0.6.3" / flavor / executable
+    return Path(__file__).resolve().parents[2] / "experimental" / "native-detour" / "bootstrap" / "bin" / "0.6.4" / flavor / executable
 
 
 def _sha256(path: Path) -> str:
@@ -522,6 +522,7 @@ def run_collect(config: Config, store: Store, args: Any = None) -> dict[str, Any
             except Exception:
                 pass
         summary["running"] = False
+        summary["requires_client_restart"] = bool(summary["native_controller_counts"].get("error"))
         summary["controller_active_reported"] = False
         summary["stopped_at"] = _stamp()
         summary["heartbeat_at"] = _stamp()

@@ -390,7 +390,7 @@ class Store:
                     if isinstance(value := regions.get(region), int)
                     and not isinstance(value, bool) and 0 <= value <= 1_000_000
                 }
-            for key in ("screen_context_storage", "interrupted", "graceful_stop", "truncated",
+            for key in ("screen_context_storage", "interrupted", "graceful_stop", "truncated", "requires_client_restart",
                         "cropSafety", "post_capture_geometry_verified"):
                 if isinstance(result.get(key), bool):
                     summary[key] = result[key]
@@ -400,7 +400,11 @@ class Store:
                         summary[key] = format_timestamp(parse_timestamp(result[key]))
                     except ValueError:
                         pass
-            for key, valid in (("mode", {"probe", "snapshot", "watch", "user_confirmed_roi_once", "native_count", "native_capture"}),
+            for key, valid in (("recovery_state", {"waiting_for_client_restart"}),
+                               ("failure_reason", {"controller_rejected", "controller_output_closed", "controller_operation_failed",
+                                                   "startup_timeout", "heartbeat_timeout", "controller_exit_failed",
+                                                   "controller_stop_timeout", "controller_not_active", "status_write_failed"}),
+                               ("mode", {"probe", "snapshot", "watch", "user_confirmed_roi_once", "native_count", "native_capture"}),
                                ("source", (*SCREEN_CONTEXT_SOURCES, "windows_native_event_pending")),
                                ("scope", {"current_visible_windows"}),
                                ("coverage", {"visible_accessibility_text_only", "visible_chat_display_region_ocr_only",

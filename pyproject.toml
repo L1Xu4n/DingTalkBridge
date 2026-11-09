@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dingtalkbridge"
-version = "0.6.3"
+version = "0.6.4"
 description = "Local, read-only DingTalk archive and dependency-free MCP stdio bridge"
 requires-python = ">=3.10"
 dependencies = []

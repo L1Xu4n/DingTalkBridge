@@ -205,6 +205,7 @@ static MH_STATUS VerifyThreadSet(FROZEN_THREADS *threads) {
     BOOL next;
     UINT seen=0,i;
     MH_STATUS status=MH_OK;
+    if(TEST_FAIL(MH_TEST_THREAD_SET)) { CloseHandle(snapshot); return MH_ERROR_THREAD_SET_CHANGED; }
     if(snapshot==INVALID_HANDLE_VALUE) return Failure(MH_ERROR_THREAD_ENUM);
     entry.dwSize=sizeof(entry);
     next=Thread32First(snapshot,&entry);
@@ -393,9 +394,11 @@ MH_STATUS WINAPI MH_CreateHook(LPVOID target,LPVOID detour,LPVOID *original) {
     }
     Unlock(); return status;
 }
+// Retry observed thread churn only before any context move or patch, after full resume.
 MH_STATUS WINAPI MH_EnableHook(LPVOID target) {
     MH_STATUS status,cleanup;
     FROZEN_THREADS threads;
+    UINT attempt;
     Lock();
     if(!g_heap) status=MH_ERROR_NOT_INITIALIZED;
     else if(!target || g_attempted || g_pending.items) status=MH_ERROR_PROCESS_LIFETIME;
@@ -403,11 +406,16 @@ MH_STATUS WINAPI MH_EnableHook(LPVOID target) {
     else {
         g_attempted=TRUE;
         ZeroMemory(&g_diag,sizeof(g_diag)); g_diag.install_attempted=TRUE;
-        status=Freeze(&threads);
-        if(status==MH_OK) status=Patch();
-        cleanup=Unfreeze(&threads); // mandatory even when Freeze failed.
-        if(threads.items) g_pending=threads;
-        if(cleanup!=MH_OK) status=cleanup;
+        for(attempt=0;attempt<3;++attempt) {
+            status=Freeze(&threads);
+            if(status==MH_OK) status=Patch();
+            cleanup=Unfreeze(&threads); // mandatory even when Freeze failed.
+            if(threads.items) g_pending=threads;
+            if(cleanup!=MH_OK) status=cleanup;
+            if(status!=MH_ERROR_THREAD_SET_CHANGED || cleanup!=MH_OK || g_pending.items ||
+               g_diag.contexts_moved || g_diag.patch_written || attempt==2) break;
+            Sleep(50);
+        }
         g_diag.status=status;
     }
     Unlock(); return status;

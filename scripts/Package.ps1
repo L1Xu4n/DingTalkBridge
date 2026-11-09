@@ -1,7 +1,7 @@
 param([string]$OutputPath)
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
-if (-not $OutputPath) { $OutputPath = Join-Path $projectRoot 'dist\DingTalkBridge-0.6.3.zip' }
+if (-not $OutputPath) { $OutputPath = Join-Path $projectRoot 'dist\DingTalkBridge-0.6.4.zip' }
 $archivePath = [IO.Path]::GetFullPath($OutputPath)
 New-Item -ItemType Directory -Path ([IO.Path]::GetDirectoryName($archivePath)) -Force | Out-Null
 $packageItems = @('README.md','LICENSE','THIRD_PARTY_NOTICES.md','PROGRESS.md','TODO.md','config.example.json','mcp.example.json','pyproject.toml','src','native','scripts','tests','docs','experimental\native-detour','experimental\ocr','experimental\calibration','experimental\wgc','experimental\accessibility-probe','.gitignore','.gitattributes','.github')

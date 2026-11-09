@@ -63,7 +63,8 @@ DWORD WINAPI Worker(void* parameter) {
     InterlockedExchange(&state->worker_alive,1);
     InterlockedExchange(&state->status,LONG(BootstrapStatus::Initializing));
     if(InterlockedCompareExchange(&state->requested_active,0,0)!=1||!InitializeReadOnlyDetour(request,state)) {
-        DisableReadOnlyCapture(state);Fail(state,BootstrapError::Initialize);CloseHandle(controller);InterlockedExchange(&g_started,0);return 0;
+        auto error=static_cast<BootstrapError>(InterlockedCompareExchange(&state->last_error,0,0));
+        DisableReadOnlyCapture(state);Fail(state,error==BootstrapError::None?BootstrapError::Initialize:error);CloseHandle(controller);InterlockedExchange(&g_started,0);return 0;
     }
     InterlockedExchange(&state->Active,1);InterlockedExchange(&state->status,LONG(BootstrapStatus::Active));
     bool lost=false;

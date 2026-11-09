@@ -321,6 +321,17 @@ def _download_complete(path: Path) -> bool:
         return False
 
 
+def _require_collector(store: Store) -> None:
+    """Explain native readiness without confusing client restart with MCP reconnection."""
+    collector = store._collector_status()
+    if collector.get("requires_client_restart"):
+        raise AttachmentError("attachment_collector_requires_DingTalk_restart")
+    if collector.get("last_observation_status") == "waiting_for_client":
+        raise AttachmentError("attachment_collector_waiting_open_DingTalk")
+    if not collector.get("running"):
+        raise AttachmentError("attachment_collector_unavailable_check_bridge_status_retry_read_attachment")
+
+
 def _client_download(store: Store, attachment: Attachment, destination: Path) -> None:
     """Wait the configured time for a client download, retaining its request for continuation."""
     account = store.native_account_id()
@@ -338,9 +349,7 @@ def _client_download(store: Store, attachment: Attachment, destination: Path) ->
     started, failed = pending.with_suffix(".started"), pending.with_suffix(".error")
     timeout = store.config.attachment_download_timeout_seconds
     if not _download_complete(downloaded):
-        collector = store._collector_status()
-        if not collector.get("running"):
-            raise AttachmentError("attachment_collector_not_running_reconnect_MCP")
+        _require_collector(store)
         if not pending.exists() and (not started.exists() or time.time() - started.stat().st_mtime > max(120, timeout * 2)):
             failed.unlink(missing_ok=True)
             arguments = {"cid_": attachment.conversation_id, "mId_": attachment.native_message_id,

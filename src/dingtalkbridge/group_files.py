@@ -13,7 +13,7 @@ import uuid
 from typing import Any
 
 from .attachment_cache import cache_lock
-from .attachments import Attachment, AttachmentError, _directory, _object, _positive_int, _text
+from .attachments import Attachment, AttachmentError, _directory, _object, _positive_int, _require_collector, _text
 from .store import Store
 
 
@@ -61,8 +61,7 @@ def _rpc(store: Store, operation: str, payload: bytes) -> Any:
         os.utime(directory, None)
         cached = directory / "response.msgpack"
         if not cached.exists() or time.time() - cached.stat().st_mtime >= 15:
-            if not store._collector_status().get("running"):
-                raise AttachmentError("attachment_collector_not_running_reconnect_MCP")
+            _require_collector(store)
             state = directory / "request.json"
             try:
                 job = json.loads(state.read_text(encoding="utf-8"))

@@ -131,14 +131,11 @@ def main(argv: list[str] | None = None) -> int:
             if arguments.command == "status":
                 _print(store.status())
             elif arguments.command == "serve":
-                if not arguments.no_collector and not arguments.demo_data and store.dataset_kind != "synthetic":
-                    from .autostart import ensure_collector
-                    try:
-                        ensure_collector(config)
-                    except (OSError, ValueError):
-                        print("DingTalkBridge: collector unavailable; check native build and local paths. Archive tools remain available.", file=sys.stderr)
+                from .autostart import maintain_collector
                 from .mcp import serve
-                serve(store)
+                enabled = not arguments.no_collector and not arguments.demo_data and store.dataset_kind != "synthetic"
+                with maintain_collector(config, enabled=enabled):
+                    serve(store)
             elif arguments.command == "import-jsonl":
                 _print(import_jsonl(store, arguments.path))
             elif arguments.command == "demo":

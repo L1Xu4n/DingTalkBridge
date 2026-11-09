@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import hashlib
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
+import threading
 import time
-from typing import Any
+from typing import Any, Iterator
 
 from .config import Config
 from .native_controller import (
@@ -51,14 +53,19 @@ def _settings(config: Config) -> bytes:
     return payload
 
 
-def ensure_collector(config: Config) -> dict[str, Any]:
+def ensure_collector(config: Config, *, respect_stop_request: bool = False) -> dict[str, Any]:
     """Reuse a locked collector or launch a hidden worker without touching MCP stdout."""
     if not IS_WINDOWS:
         return {"status": "unsupported_platform"}
     if _locked(config, "native-autostart.lock") or _locked(config, "native-collector.lock"):
         return {"status": "already_running"}
+    stop_path = config.data_dir / "native-stop.request"
+    if respect_stop_request and stop_path.exists():
+        return {"status": "stopped"}
     _validate_build(default_controller_path(), synthetic=False)
     payload = _settings(config)
+    if not respect_stop_request:
+        stop_path.unlink(missing_ok=True)
     source = Path(__file__).resolve().parents[1]
     environment = dict(os.environ, PYTHONPATH=str(source), PYTHONUTF8="1")
     startup = subprocess.STARTUPINFO()
@@ -81,8 +88,39 @@ def ensure_collector(config: Config) -> dict[str, Any]:
     return {"status": "starting", "pid": process.pid}
 
 
+@contextmanager
+def maintain_collector(config: Config, *, enabled: bool = True) -> Iterator[None]:
+    """Keep MCP's shared worker available while respecting explicit stop requests."""
+    if not enabled:
+        yield
+        return
+    stopped = threading.Event()
+
+    def ensure(*, respect_stop_request: bool = False) -> None:
+        """Attempt recovery with fixed diagnostics and no private data on MCP stdout."""
+        try:
+            ensure_collector(config, respect_stop_request=respect_stop_request)
+        except (OSError, ValueError):
+            print("DingTalkBridge: collector unavailable; check native build and bridge_status.", file=sys.stderr)
+
+    def watch() -> None:
+        """Recheck worker ownership during idle periods without undoing a manual stop."""
+        while not stopped.wait(5):
+            if not (config.data_dir / "native-stop.request").exists():
+                ensure(respect_stop_request=True)
+
+    ensure()
+    worker = threading.Thread(target=watch, name="native-collector-watch", daemon=True)
+    worker.start()
+    try:
+        yield
+    finally:
+        stopped.set()
+        worker.join(timeout=1)
+
+
 def run_worker(config: Config) -> int:
-    """Wait for DingTalk, then collect until stopped; concurrent workers exit quietly."""
+    """Wait and recover across client exits, requiring a new client after native rejection."""
     try:
         ownership = _acquire_lock(config, "native-autostart.lock")
     except CollectorError as error:
@@ -94,10 +132,10 @@ def run_worker(config: Config) -> int:
             return 0
         _validate_build(default_controller_path(), synthetic=False)
         stop_path = config.data_dir / "native-stop.request"
-        stop_path.unlink(missing_ok=True)
         with Store(config.database_path, config) as store:
             if store.dataset_kind == "synthetic":
                 return 0
+            blocked_pid = None
             while not stop_path.exists():
                 try:
                     target = select_target()
@@ -111,6 +149,9 @@ def run_worker(config: Config) -> int:
                     continue
                 if stop_path.exists():
                     break
+                if target["pid"] == blocked_pid:
+                    time.sleep(2)
+                    continue
                 try:
                     result = run_collect(config, store, {**target, "mode": "capture", "duration": 0,
                                                         "preserve_stop_request": True})
@@ -118,7 +159,13 @@ def run_worker(config: Config) -> int:
                     if str(error) == "native_controller:collector_already_running":
                         return 0
                     raise
-                return 1 if result.get("status") == "failed" else 0
+                if result.get("interrupted"):
+                    return 0
+                if result.get("requires_client_restart"):
+                    blocked_pid = target["pid"]
+                    _write_status(config, {**result, "recovery_state": "waiting_for_client_restart"})
+                if not stop_path.exists():
+                    time.sleep(2)
             _write_status(config, {
                 "status": "stopped", "mode": "native_capture", "running": False,
                 "heartbeat_at": _stamp(), "stopped_at": _stamp(),

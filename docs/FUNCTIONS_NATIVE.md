@@ -107,6 +107,15 @@
 | `_put` | Enqueue a frame or signal backpressure rather than using unbounded RAM. |
 | `_read` | Read complete bounded JSONL frames until shutdown or stream failure. |
 
+0.6.4 的 Bootstrap `Worker` 保留核心初始化返回的具体错误码。`run_collect` 在原生拒绝后返回 `requires_client_restart`，由自动采集 worker 等待新的钉钉进程。
+
+## MinHook 初始化
+
+| 函数 | 作用 |
+| --- | --- |
+| `MH_EnableHook` | 在线程列表变化时最多尝试三轮冻结和核验，每次重试前确认已恢复全部暂停线程，且尚未移动指令指针或写入补丁。 |
+| `VerifyThreadSet` | 核验冻结前后的线程集合，测试构建可模拟一次线程变化。 |
+
 ## src/dingtalkbridge/native_receive.py
 
 | 函数 | 作用 |
