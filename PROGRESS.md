@@ -9,7 +9,8 @@
 - 用户完整重开钉钉并重连 MCP 后，按进程模块路径确认 Controller / DLL 均加载 0.6.4。正式采集保持 running=true、原生错误 0。
 - 独立 MCP stdio 子进程完整读取通知 PDF 的 1762 字正文（已有缓存），并按需下载规则 DOCX、三次分页读完 1439 字正文。按文件名在另一会话归档中定位目标原件；私人核验记录只保存在 runtime/attachment-recovery-064.private.json。
 - 新增及修改函数均附用途注释，函数说明与使用文档同步更新。原生组件、Python wheel 与源码 ZIP 已构建。
-- 按用户要求同步 0.6.4，核对本次 23 个源码、测试和文档文件，正在通过普通 SSH 443 push 推送到 GitHub `main` 并跟进 CI。
+- 按用户要求将本次 23 个源码、测试和文档文件通过普通 SSH 443 push 推送到 GitHub `main`，功能提交为 `8ed202c`。GitHub [Checks #42617090302](https://github.com/L1Xu4n/DingTalkBridge/actions/runs/42617090302) 的现有测试与原生 fixture 编译均通过。
+- 发布记录使用 `[skip ci]` 文档提交同步。
 
 ## 2026-11-08 · 推送 0.6.3
 
