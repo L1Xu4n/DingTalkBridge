@@ -28,6 +28,8 @@ MCP 客户端连接时会自动启动采集，已运行的采集器会直接复�
 
 消息保存在本机，不按天数过期或自动清理。启动后持续分页补采客户端可返回的历史，不限制会话数和每会话消息总数。切换账号时请换用独立的 `data_dir`。
 
+原生构建会同时识别同一安装目录中 `main\current\DingTalk.exe` 和 `main\current_new\DingTalk.exe`，并核对运行目录里的 `MainFrame.dll`。已有旧构建的用户需运行一次 `.\scripts\Build-Native.ps1`，然后完整重开钉钉并重连 MCP。
+
 `bridge_status` 返回 `target_path_mismatch` 表示检测到了钉钉窗口，但其程序路径与本机原生构建清单不符，当前采集已暂停。归档中的最新消息时间可用于核对中断范围。
 
 ## 接入 MCP

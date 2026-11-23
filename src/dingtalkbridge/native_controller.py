@@ -121,7 +121,7 @@ def _json_object(raw: bytes, *, maximum: int = MAX_FRAME_BYTES) -> dict[str, Any
 
 
 def _validate_build(path: Path, *, synthetic: bool) -> None:
-    """Check build flavor, target identity and executable/DLL hashes."""
+    """Check build flavor, allowed target paths and executable/DLL hashes."""
     expected_exe = "BridgeControllerSynthetic.exe" if synthetic else "BridgeController.exe"
     expected_dll = "BridgeBootstrapSynthetic.dll" if synthetic else "BridgeBootstrap.dll"
     if path.name != expected_exe or not path.is_file():
@@ -134,10 +134,11 @@ def _validate_build(path: Path, *, synthetic: bool) -> None:
         if not synthetic:
             if manifest.get("synthetic_core") != "root":
                 raise _fail("build_target_mismatch")
-            _manifest_target(manifest)
+            _manifest_targets(manifest)
         if synthetic:
             target = Path(str(manifest.get("target_path", "")))
-            if target.name != "DingTalkBridgeNativeSyntheticHost.exe" or target.resolve().parent != path.parent.resolve():
+            if ("alternate_target_path" in manifest or target.name != "DingTalkBridgeNativeSyntheticHost.exe"
+                    or target.resolve().parent != path.parent.resolve()):
                 raise _fail("build_target_mismatch")
         for key, artifact in (("controller_sha256", path), ("dll_sha256", path.parent / expected_dll)):
             expected = manifest.get(key)
@@ -149,21 +150,32 @@ def _validate_build(path: Path, *, synthetic: bool) -> None:
         raise _fail("build_unavailable") from None
 
 
-def _manifest_target(manifest: dict[str, Any]) -> str:
-    """Validate the locally compiled target path without requiring one installation drive."""
+def _manifest_targets(manifest: dict[str, Any]) -> tuple[str, ...]:
+    """Accept an explicit alternate only for sibling layouts in the same main directory."""
     target = manifest.get("target_path")
-    if not isinstance(target, str) or not ntpath.isabs(target) or ntpath.basename(target).lower() != "dingtalk.exe":
+    if (not isinstance(target, str) or not ntpath.splitdrive(target)[0] or not ntpath.isabs(target)
+            or ntpath.basename(target).lower() != "dingtalk.exe"):
         raise _fail("build_target_mismatch")
-    return target
+    if "alternate_target_path" not in manifest:
+        return (target,)
+    alternate = manifest["alternate_target_path"]
+    main, layout = ntpath.split(ntpath.dirname(target))
+    alternate_layout = {"current": "current_new", "current_new": "current"}.get(layout.lower())
+    if ntpath.basename(main).lower() != "main" or alternate_layout is None or not isinstance(alternate, str):
+        raise _fail("build_target_mismatch")
+    expected = ntpath.join(main, alternate_layout, "DingTalk.exe")
+    if ntpath.normcase(alternate) != ntpath.normcase(expected):
+        raise _fail("build_target_mismatch")
+    return target, alternate
 
 
-def configured_target_path() -> str | None:
-    """Read the local build target for discovery; an unbuilt probe may match executable name only."""
+def configured_target_paths() -> tuple[str, ...]:
+    """Read the full paths compiled into the local build, if one exists."""
     manifest_path = default_controller_path().parent / "build.json"
     if not manifest_path.exists():
-        return None
+        return ()
     with manifest_path.open("rb") as handle:
-        return _manifest_target(_json_object(handle.read(65537), maximum=65536))
+        return _manifest_targets(_json_object(handle.read(65537), maximum=65536))
 
 
 def _validate_options(config: Config, store: Store, args: Any) -> tuple[Path, bool, str, int, int, float, str]:

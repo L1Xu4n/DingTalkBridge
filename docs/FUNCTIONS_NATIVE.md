@@ -11,8 +11,8 @@
 | `void Error` | 写入固定错误码和采集状态。 |
 | `std::uint64_t Creation` | 获取进程创建时间，防止 PID 被复用后误认进程。 |
 | `std::wstring OwnImage` | 获取当前进程的完整程序路径。 |
-| `bool SamePath` | 按 Windows 路径规则比较目标路径。 |
-| `bool Profile` | 核对目标进程、动态代码策略、入口指令和对象类型布局。 |
+| `std::string ClientVersion` | 从实际运行的程序路径读取版本元数据。 |
+| `bool Profile` | 核对目标进程、配对模块、动态代码策略、入口指令和对象类型布局。 |
 | `bool Live` | 确认采集开关和控制器仍有效。 |
 | `std::string Stamp` | 生成 UTC 观察时间，不冒充消息发送时间。 |
 | `void Queue` | 以容量限制和非阻塞锁保存消息副本。 |
@@ -43,7 +43,7 @@
 | 函数 | 作用 |
 | --- | --- |
 | `void Fail` | 把初始化失败写入共享状态。 |
-| `bool Validate` | 在钉钉进程内独立核验请求、控制器和目标窗口身份。 |
+| `bool Validate` | 在钉钉进程内独立核验请求、控制器、目标窗口和配对模块。 |
 | `DWORD WINAPI Worker` | 在加载器锁外初始化采集，监督控制器和停止请求。 |
 | `extern "C" __declspec(dllexport) LRESULT CALLBACK CallWndProcHook` | 接收指定线程的启动消息，再将原窗口通知继续传递。 |
 | `HANDLE ConnectVerifiedControllerPipe` | 仅连接进程身份核验通过的本地控制器管道。 |
@@ -70,16 +70,18 @@
 | `inline bool OwnSecurity` | 为 IPC 建立只属于当前 Windows 用户的访问控制。 |
 | `inline bool MappingOwnedBy` | 核验共享内存对象的所有者 SID。 |
 | `inline bool WindowThreadBound` | 核验顶层窗口仍属于指定进程和线程。 |
-| `inline bool LockedTarget` | 限制目标为配置的钉钉程序路径。 |
+| `ExpectedMainFramePath` | 从构建允许的程序全路径中选出对应的 MainFrame.dll 路径。 |
+| `VerifiedMainFrameModule` | 获取已加载的 MainFrame.dll 并核对其完整路径。 |
+| `inline bool LockedTarget` | 核对程序全路径是否在构建允许的范围内。 |
 | `inline bool LockedController` | 限制启动方为本构建的控制器路径。 |
 
 ## src/dingtalkbridge/native_target.py
 
 | 函数 | 作用 |
 | --- | --- |
-| `discover_targets` | Enumerate only window/process metadata; never read titles or message text. |
+| `discover_targets` | 按构建允许的程序路径枚举可见窗口元数据。 |
 | `select_target` | Select the largest window in one process; require a PID if several clients exist. |
-| `visit` | Keep visible windows whose process image exactly matches this build target. |
+| `visit` | 核对单个可见窗口及其进程的完整路径。 |
 
 ## src/dingtalkbridge/native_controller.py
 
@@ -93,7 +95,7 @@
 | `_unique_object` | Reject duplicate JSON keys instead of silently replacing protocol fields. |
 | `_reject_constant` | Reject nonstandard JSON numbers such as NaN. |
 | `_json_object` | Decode one size-limited UTF-8 protocol object without exposing its contents. |
-| `_validate_build` | Check build flavor, target identity and executable/DLL hashes. |
+| `_validate_build` | 核对构建类型、允许的目标路径及产物哈希。 |
 | `_validate_options` | Validate database, window, duration and session before touching the client. |
 | `_status_frame` | Accept only known bounded Controller status fields. |
 | `_request_stop` | Request native cooperative cleanup, then use bounded process fallbacks. |

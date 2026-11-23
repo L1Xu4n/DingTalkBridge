@@ -8,6 +8,22 @@ param(
     [string]$OutputRoot
 )
 $ErrorActionPreference='Stop'
+# Derive only the sibling layout within the same main directory.
+function Get-AlternateDingTalkPath([string]$Path) {
+    $clientDirectory = Split-Path -Parent $Path
+    $ignoreCase = [StringComparison]::OrdinalIgnoreCase
+    $layout = Split-Path -Leaf $clientDirectory
+    if ([string]::Equals($layout, 'current', $ignoreCase)) {
+        $alternateLayout = 'current_new'
+    } elseif ([string]::Equals($layout, 'current_new', $ignoreCase)) {
+        $alternateLayout = 'current'
+    } else {
+        return ''
+    }
+    $mainDirectory = Split-Path -Parent $clientDirectory
+    if (-not [string]::Equals((Split-Path -Leaf $mainDirectory), 'main', $ignoreCase)) { return '' }
+    return (Join-Path $mainDirectory "$alternateLayout\DingTalk.exe")
+}
 if (-not $MsvcRoot) {
     $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
     if (-not (Test-Path -LiteralPath $vswhere)) { throw 'Install Visual Studio C++ Build Tools or pass -MsvcRoot' }
@@ -52,6 +68,14 @@ foreach($flavor in @('synthetic','production')){
     $dll=Join-Path $out "BridgeBootstrap$suffix.dll"
     $exePath=if($synthetic){$fixtureExe}else{$DingTalkPath}
     $main=Join-Path (Split-Path -Parent $exePath) 'MainFrame.dll'
+    $alternateExePath=''
+    $alternateMain=''
+    if (-not $synthetic) {
+        $alternateExePath=Get-AlternateDingTalkPath $exePath
+        if ($alternateExePath) {
+            $alternateMain=Join-Path (Split-Path -Parent $alternateExePath) 'MainFrame.dll'
+        }
+    }
     $flavorNum=if($synthetic){2}else{1};$macro=if($synthetic){1}else{0}
     $header=@"
 #pragma once
@@ -60,9 +84,11 @@ foreach($flavor in @('synthetic','production')){
 namespace bridge_native {
 constexpr unsigned kBuildFlavor=$flavorNum;
 constexpr wchar_t kExpectedTargetPath[]=$(CppString $exePath);
+constexpr wchar_t kAlternateTargetPath[]=$(CppString $alternateExePath);
 constexpr wchar_t kExpectedControllerPath[]=$(CppString $controller);
 constexpr wchar_t kExpectedDllPath[]=$(CppString $dll);
 constexpr wchar_t kExpectedMainFramePath[]=$(CppString $main);
+constexpr wchar_t kAlternateMainFramePath[]=$(CppString $alternateMain);
 }
 "@
     [IO.File]::WriteAllText((Join-Path $out 'BuildIdentity.h'),$header,$utf8)
@@ -85,6 +111,7 @@ constexpr wchar_t kExpectedMainFramePath[]=$(CppString $main);
     & (Join-Path $MsvcRoot 'bin\Hostx64\x64\link.exe') /nologo /DLL /guard:cf /DYNAMICBASE /NXCOMPAT @objects ("/OUT:$dll") user32.lib advapi32.lib bcrypt.lib version.lib
     if($LASTEXITCODE -ne 0){throw 'Native bootstrap DLL link failed'}
     $manifest=@{schema='dingtalkbridge.native-bootstrap-build.v1';flavor=$flavor;synthetic_core=if($synthetic){$SyntheticCore}else{'root'};target_path=$exePath;client_hash_required=$false;compatibility='notification400-layout-v1';controller_sha256=(Get-FileHash -LiteralPath $controller -Algorithm SHA256).Hash.ToLowerInvariant();dll_sha256=(Get-FileHash -LiteralPath $dll -Algorithm SHA256).Hash.ToLowerInvariant()}
+    if ($alternateExePath) { $manifest.alternate_target_path=$alternateExePath }
     [IO.File]::WriteAllText((Join-Path $out 'build.json'),($manifest|ConvertTo-Json)+[Environment]::NewLine,$utf8)
 }
 # Build only. Never launches/attaches to DingTalk or any process.

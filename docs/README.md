@@ -21,11 +21,12 @@
 
 | 函数/脚本 | 作用 |
 | --- | --- |
-| `native_controller._manifest_target` | 检查构建目标是绝对路径下的 DingTalk.exe，不限制安装盘。 |
-| `native_controller.configured_target_path` | 从本机构建清单读取目标路径，用于窗口发现；未构建时允许只做进程名称探测。 |
+| `native_controller._manifest_targets` | 校验主路径，备用路径限于同一 `main` 下的另一更新目录。 |
+| `native_controller.configured_target_paths` | 读取本机构建允许的完整路径，供窗口发现使用。 |
 | `native_target.discover_targets` | 按本机构建目标筛选窗口，采集前仍由 Controller 独立核验完整身份。 |
 | `scripts/Write-McpConfig.ps1` | 生成含本机 Python、源码及数据配置路径的 MCP JSON。 |
 | `bootstrap/Build.ps1` | 自动找到编译器/SDK/钉钉，生成只属于本次构建的路径绑定。 |
+| `Get-AlternateDingTalkPath` | 从当前构建路径推导同一安装下的另一更新目录。 |
 | `test_cli_environment_config_selects_the_same_explicit_database` | 验证环境变量选择的数据库路径一致，并兼容 Windows 8.3 短路径别名。 |
 
 其它函数见 [FUNCTIONS_NATIVE.md](FUNCTIONS_NATIVE.md)。公开验证范围见 [NATIVE_LIVE_VERIFICATION.md](NATIVE_LIVE_VERIFICATION.md)。

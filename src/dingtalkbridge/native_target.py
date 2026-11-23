@@ -5,7 +5,7 @@ from __future__ import annotations
 import ctypes
 from ctypes import wintypes
 import os
-from .native_controller import configured_target_path
+from .native_controller import configured_target_paths
 
 
 class TargetPathMismatch(ValueError):
@@ -13,10 +13,10 @@ class TargetPathMismatch(ValueError):
 
 
 def discover_targets() -> list[dict[str, int]]:
-    """Enumerate only window/process metadata; never read titles or message text."""
+    """Enumerate visible windows using the native build's allowed executable paths."""
     if os.name != "nt":
         raise ValueError("native collection requires Windows")
-    expected_path = configured_target_path()
+    expected_paths = {os.path.normcase(path) for path in configured_target_paths()}
     user = ctypes.WinDLL("user32", use_last_error=True)
     kernel = ctypes.WinDLL("kernel32", use_last_error=True)
     callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
@@ -36,7 +36,7 @@ def discover_targets() -> list[dict[str, int]]:
 
     @callback_type
     def visit(hwnd: int, _parameter: int) -> bool:
-        """Keep visible windows whose process image exactly matches this build target."""
+        """Keep visible DingTalk windows whose full image path matches the build."""
         nonlocal path_mismatch
         if not user.IsWindowVisible(hwnd):
             return True
@@ -51,7 +51,7 @@ def discover_targets() -> list[dict[str, int]]:
                 return True
             if os.path.basename(path.value).lower() != "dingtalk.exe":
                 return True
-            if expected_path and os.path.normcase(path.value) != os.path.normcase(expected_path):
+            if expected_paths and os.path.normcase(path.value) not in expected_paths:
                 path_mismatch = True
                 return True
             rect = wintypes.RECT()
