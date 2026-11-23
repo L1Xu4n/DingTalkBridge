@@ -1,6 +1,7 @@
 // Layout-compatible read-only notification tap; no whole-client hash gate.
 // The module and its sole trampoline remain pinned for this process lifetime.
 #define NOMINMAX
+#include "ClientLayout.h"
 #include "bootstrap/Identity.h"
 #include "payload/payload_parser.h"
 #include "payload/safe_read.h"
@@ -22,11 +23,6 @@ namespace bridge_native {
 namespace {
 namespace payload = dingtalkbridge::native::payload;
 using Dispatch = void (__fastcall *)(void*, std::int32_t, const void*, const void*);
-std::string g_client_version = "unknown";
-constexpr std::uintptr_t kDispatchRva = 0x36c7d90;
-constexpr BYTE kEntryBytes[32] = {0x40,0x55,0x53,0x56,0x57,0x41,0x54,0x41,
-    0x55,0x41,0x56,0x41,0x57,0x48,0x8d,0xac,0x24,0xe8,0xfe,0xff,
-    0xff,0x48,0x81,0xec,0x18,0x02,0x00,0x00,0x48,0x8b,0x05,0x65};
 constexpr std::size_t kMaximumQueueMessages = 64;
 constexpr std::size_t kMaximumQueueBytes = 4 * 1024 * 1024;
 constexpr std::size_t kMaximumFrame = 512 * 1024;
@@ -41,8 +37,16 @@ struct Handle {
     Handle& operator=(const Handle&) = delete;
 };
 struct QueuedMessage { payload::ParsedMessage message; std::string observed_at; std::size_t bytes = 0; std::string raw_frame; };
+struct VerifiedDispatch {
+    void* target = nullptr;
+    std::uintptr_t base = 0;
+    const ClientLayout* layout = nullptr;
+    payload::VtableRvas vtables{};
+    std::string app_version = "unknown";
+};
 struct Session {
     BootstrapRequest request{}; // An immutable copy, never a borrowed request reference.
+    VerifiedDispatch profile;
     SharedState* shared = nullptr; // Bootstrap retains this mapping for process lifetime.
     HANDLE controller = nullptr; // Retained for the same lifetime: no stale handle reuse.
     std::atomic<bool> enabled{false};
@@ -55,7 +59,6 @@ struct Session {
 };
 std::atomic<Session*> g_current{nullptr};
 std::atomic<Dispatch> g_original{nullptr};
-std::atomic<std::uintptr_t> g_message_base{0};
 std::array<Session*,8> g_sessions{}; // At most eight sessions before an app restart.
 std::size_t g_session_count = 0;
 SRWLOCK g_initialization_lock = SRWLOCK_INIT;
@@ -98,22 +101,28 @@ std::string ClientVersion(const std::wstring& image) {
     std::snprintf(version,sizeof(version),"%u.%u.%u.%u",HIWORD(info->dwFileVersionMS),LOWORD(info->dwFileVersionMS),HIWORD(info->dwFileVersionLS),LOWORD(info->dwFileVersionLS));
     return version;
 }
-// Compare only the dispatch signature; unrelated client bytes may differ.
-bool ByteMatch(const void* address,const BYTE* expected) {
+// Confirm a resident patch still matches the bytes recorded at installation.
+bool InstalledEntryMatches(const void* address) {
     BYTE owned[32]{};
-    return payload::detail::safe_read(address,owned,sizeof(owned)) && !std::memcmp(owned,expected,sizeof(owned));
+    return address==g_target && payload::detail::safe_read(address,owned,sizeof(owned)) &&
+        std::memcmp(owned,g_installed_entry,sizeof(owned))==0;
 }
 // Validate the expected vtable/RTTI relationship without hashing the client file.
-bool CompatibleType(std::uintptr_t base,std::uintptr_t vtable,std::uint32_t type,const char* name) {
+bool CompatibleType(std::uintptr_t base,const RttiType& type,const char* name) {
     std::uintptr_t locator=0; std::uint32_t fields[6]{}; char actual[96]{};
     const auto length=std::strlen(name)+1;
-    if(length>sizeof(actual) || !payload::detail::safe_read(reinterpret_cast<void*>(base+vtable-8),&locator,sizeof(locator))) return false;
-    if(!payload::detail::safe_read(reinterpret_cast<void*>(locator),fields,sizeof(fields))) return false;
-    if(fields[0]!=1 || fields[1]!=0 || fields[3]!=type || locator!=base+fields[5]) return false;
-    return payload::detail::safe_read(reinterpret_cast<void*>(base+type+16),actual,length) && std::memcmp(actual,name,length)==0;
+    const auto locator_slot=base+type.vtable-sizeof(locator);
+    if(!ImageContains(base,locator_slot,sizeof(locator)) ||
+       !payload::detail::safe_read(reinterpret_cast<void*>(locator_slot),&locator,sizeof(locator))) return false;
+    if(!ImageContains(base,locator,sizeof(fields)) ||
+       !payload::detail::safe_read(reinterpret_cast<void*>(locator),fields,sizeof(fields))) return false;
+    if(fields[0]!=1 || fields[1]!=0 || fields[2]!=0 || fields[3]!=type.descriptor || locator!=base+fields[5]) return false;
+    const auto name_address=base+type.descriptor+16;
+    return length<=sizeof(actual) && ImageContains(base,name_address,length) &&
+        payload::detail::safe_read(reinterpret_cast<void*>(name_address),actual,length) && std::memcmp(actual,name,length)==0;
 }
 // 核对目标进程、动态代码策略、配对模块、入口指令和对象类型布局。
-bool Profile(const BootstrapRequest& request,void*& target,std::uintptr_t& message_base) {
+bool Profile(const BootstrapRequest& request,VerifiedDispatch& profile) {
     if (request.target_pid!=GetCurrentProcessId() || Creation(GetCurrentProcess())!=request.target_creation_time) return false;
     PROCESS_MITIGATION_DYNAMIC_CODE_POLICY dynamic{};
     if (!GetProcessMitigationPolicy(GetCurrentProcess(),ProcessDynamicCodePolicy,&dynamic,sizeof(dynamic)) || dynamic.ProhibitDynamicCode) return false;
@@ -124,20 +133,29 @@ bool Profile(const BootstrapRequest& request,void*& target,std::uintptr_t& messa
     if (request.build_flavor!=2) return false;
     auto slash=image.find_last_of(L"\\/");
     if (image.substr(slash==std::wstring::npos?0:slash+1)!=L"DingTalkBridgeNativeSyntheticHost.exe") return false;
-    target=reinterpret_cast<void*>(GetProcAddress(GetModuleHandleW(nullptr),"DtbSyntheticDispatch"));
-    message_base=0x180000000ULL; // Values used only by this separate owned fixture.
-    return target!=nullptr && (g_install_state!=2 || (target==g_target && ByteMatch(target,g_installed_entry)));
+    profile.target=reinterpret_cast<void*>(GetProcAddress(GetModuleHandleW(nullptr),"DtbSyntheticDispatch"));
+    profile.base=0x180000000ULL; // Values used only by this separate owned fixture.
+    profile.vtables=payload::kSyntheticVtables;
+    return profile.target && (g_install_state!=2 || InstalledEntryMatches(profile.target));
 #else
     if (request.build_flavor!=1) return false;
     HMODULE module=VerifiedMainFrameModule(expectedMainFrame);
     if (!module) return false;
-    g_client_version = ClientVersion(image);
-    target=reinterpret_cast<void*>(reinterpret_cast<std::uintptr_t>(module)+kDispatchRva);
-    message_base=reinterpret_cast<std::uintptr_t>(module);
-    if (!CompatibleType(message_base,0x709e9e0,0x9df1e38,".?AVMessage@object@mj@@") ||
-        !CompatibleType(message_base,0x70d0e48,0x9c461c0,".?AVMesssageContentText@object@mj@@")) return false;
-    // No fuzzy pattern scanning, hotpatch-above, or changing another hook.
-    return g_install_state==2 ? target==g_target && ByteMatch(target,g_installed_entry) : ByteMatch(target,kEntryBytes);
+    profile.base=reinterpret_cast<std::uintptr_t>(module);
+    for (const auto* candidate:kClientLayouts) {
+        auto* target=reinterpret_cast<void*>(profile.base+candidate->dispatch.rva);
+        const bool entry_matches=g_install_state==2 && target==g_target ?
+            InstalledEntryMatches(target) : MatchesImageEntry(profile.base,candidate->dispatch);
+        if (!entry_matches || !CompatibleType(profile.base,candidate->message,".?AVMessage@object@mj@@") ||
+            !CompatibleType(profile.base,candidate->text,".?AVMesssageContentText@object@mj@@")) continue;
+        if (profile.layout) return false; // Fail closed on an ambiguous match.
+        profile.target=target;
+        profile.layout=candidate;
+    }
+    if (!profile.layout || (g_install_state==2 && profile.target!=g_target)) return false;
+    profile.vtables={profile.layout->message.vtable,profile.layout->text.vtable};
+    profile.app_version=ClientVersion(image);
+    return true;
 #endif
 }
 // 确认采集开关和控制器仍有效。
@@ -157,7 +175,7 @@ bool AccountValid(Session* session) noexcept {
     return Live(session);
 #else
     std::int64_t current=0;
-    if(!Live(session)||!history::ReadAccountUid(g_message_base.load(),current))return false;
+    if(!Live(session)||!history::ReadAccountUid(session->profile.base,session->profile.layout->account,current))return false;
     std::int64_t expected=0;
     session->account_uid.compare_exchange_strong(expected,current);
     if(session->account_uid.load()!=current) {
@@ -194,7 +212,7 @@ bool QueueHistory(void* opaque,const std::string& frame) noexcept {
 // Run native history queries separately from both window dispatch and pipe output.
 DWORD WINAPI HistoryWorker(void* opaque) noexcept {
     auto* session=static_cast<Session*>(opaque);
-    history::Run(g_message_base.load(),session->request,session->shared,session,HistoryActive,QueueHistory);
+    history::Run(session->profile.base,*session->profile.layout,session->request,session->shared,session,HistoryActive,QueueHistory);
     if(Read(&session->shared->history_stage)==7) {
         session->enabled.store(false);InterlockedExchange(&session->shared->Active,0);
         Error(session->shared,BootstrapError::Identity);
@@ -226,7 +244,7 @@ void Queue(void* opaque,payload::ParsedMessage&& message) noexcept {
 void Capture(Session* session,std::int32_t event_type,const void* detail) noexcept {
     if (g_in_capture || !AccountValid(session) || session->request.mode!=CaptureMode::CaptureMessages) return;
     g_in_capture=true;
-    const auto result=payload::parse_on_notification(event_type,detail,g_message_base.load(),session,Queue);
+    const auto result=payload::parse_on_notification(event_type,detail,session->profile.base,session->profile.vtables,session,Queue);
     InterlockedAdd64(&session->shared->messages_seen,result.nodes_visited);
     if (result.reason!=payload::DropReason::none && result.reason!=payload::DropReason::event_not_selected) Increment(&session->shared->decode_errors);
     g_in_capture=false;
@@ -258,7 +276,7 @@ std::string Frame(const Session& session,const QueuedMessage& row) {
     if(!row.raw_frame.empty())return row.raw_frame;
     std::string result; result.reserve(row.bytes+512);
     result="{\"schema\":\"dingtalkbridge.native-receive.v1\",\"app_version\":";
-    JsonString(result,g_client_version);
+    JsonString(result,session.profile.app_version);
     result+=",\"module_sha256\":\"\",\"collector_session_id\":";
     JsonString(result,session.request.collector_session_id);
     result+=",\"message_id\":"; JsonString(result,row.message.message_id);
@@ -357,9 +375,9 @@ bool InitializeReadOnlyDetour(const BootstrapRequest& claims,SharedState* shared
         if (g_install_state<0 || g_session_count>=g_sessions.size()) { Error(shared,BootstrapError::Initialize); return false; }
         auto* old=g_current.load(std::memory_order_acquire);
         if (Live(old)) { Error(shared,BootstrapError::Duplicate,BootstrapStatus::Rejected); return false; }
-        void* target=nullptr; std::uintptr_t message_base=0;
-        if (!Profile(request,target,message_base)) { Increment(&shared->identity_failures);Error(shared,BootstrapError::ModuleHash);return false; }
         auto session=std::make_unique<Session>(); session->request=request;session->shared=shared;
+        if (!Profile(request,session->profile)) { Increment(&shared->identity_failures);Error(shared,BootstrapError::ModuleHash);return false; }
+        void* target=session->profile.target;
         session->controller=OpenProcess(SYNCHRONIZE|PROCESS_QUERY_LIMITED_INFORMATION,FALSE,request.controller_pid);
         if (!session->controller || Creation(session->controller)!=request.controller_creation_time || WaitForSingleObject(session->controller,0)!=WAIT_TIMEOUT) {
             Error(shared,BootstrapError::Identity); return false;
@@ -376,7 +394,7 @@ bool InitializeReadOnlyDetour(const BootstrapRequest& claims,SharedState* shared
             if (status==MH_OK) status=MH_CreateHook(target,reinterpret_cast<void*>(&Tap),&trampoline);
             if (status==MH_OK && trampoline) {
                 g_original.store(reinterpret_cast<Dispatch>(trampoline),std::memory_order_release);
-                g_target=target;g_message_base.store(message_base);
+                g_target=target;
                 status=MH_EnableHook(target);
             }
             if (status!=MH_OK || !trampoline) {

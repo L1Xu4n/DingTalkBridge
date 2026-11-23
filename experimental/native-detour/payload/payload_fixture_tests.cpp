@@ -58,6 +58,7 @@ struct Fixture {
     std::uintptr_t param{}, sentinel{}, details{};
     std::vector<std::uintptr_t> nodes, messages, contents;
 
+    // Construct a private synthetic batch with fixture-only vtable values.
     explicit Fixture(const std::vector<std::string>& texts) {
         param = arena.allocate(0x78);
         sentinel = arena.allocate(32);
@@ -71,13 +72,13 @@ struct Fixture {
             const auto content = arena.allocate(0x58);
             messages.push_back(message);
             contents.push_back(content);
-            arena.put(message, kSyntheticModuleBase + kMessageVtableRva);
+            arena.put(message, kSyntheticModuleBase + kSyntheticVtables.message);
             arena.put(message + 8, content);
             arena.string(message + 0x38, "synthetic-conversation");
             arena.put(message + 0x58, INT64_C(9007199254740993) + static_cast<std::int64_t>(i));
             arena.put(message + 0x68, INT64_C(123456789012345678));
             arena.put(message + 0xf4, std::int32_t{1});
-            arena.put(content, kSyntheticModuleBase + kTextContentVtableRva);
+            arena.put(content, kSyntheticModuleBase + kSyntheticVtables.text);
             arena.string(content + 0x38, texts[i]);
             arena.put(nodes[i], i + 1 == nodes.size() ? sentinel : nodes[i + 1]);
             arena.put(nodes[i] + 8, i == 0 ? sentinel : nodes[i - 1]);
@@ -98,14 +99,16 @@ struct Captured {
     }
 };
 
+// Invoke the parser with the synthetic batch's vtable values.
 ParseResult parse(Fixture& fixture, Captured& capture) {
     return parse_on_notification(400, reinterpret_cast<const void*>(fixture.details),
-                                 kSyntheticModuleBase, &capture, &Captured::sink);
+                                 kSyntheticModuleBase, kSyntheticVtables, &capture, &Captured::sink);
 }
 
+// Exercise event selection with invalid arguments that must remain unread.
 void selection_does_not_read_arguments() {
     const auto result = parse_on_notification(399, reinterpret_cast<void*>(1),
-                                               1, reinterpret_cast<void*>(1), nullptr);
+                                               1, {}, reinterpret_cast<void*>(1), nullptr);
     require(result.reason == DropReason::event_not_selected, "event_selection");
 }
 
@@ -142,6 +145,7 @@ void skip_nontext_without_content_access() {
                 capture.values.empty(), "skip_nontext");
 }
 
+// Require exact vtable matches for both message and text objects.
 void exact_vtable_guards() {
     Fixture first({"fixture"});
     first.arena.put(first.messages[0], std::uintptr_t{0});
@@ -149,7 +153,7 @@ void exact_vtable_guards() {
     require(parse(first, capture).reason == DropReason::message_vtable_mismatch,
             "message_vtable");
     Fixture second({"fixture"});
-    second.arena.put(second.contents[0], kSyntheticModuleBase + kTextContentVtableRva + 8);
+    second.arena.put(second.contents[0], kSyntheticModuleBase + kSyntheticVtables.text + 8);
     require(parse(second, capture).reason == DropReason::text_vtable_mismatch &&
                 capture.values.empty(), "content_vtable");
 }
@@ -196,6 +200,7 @@ void string_bounds_and_invalid_utf8() {
     require(capture.values.empty(), "no_invalid_delivery");
 }
 
+// Reject unreadable strings, invalid identifiers and absent sinks.
 void pointers_and_identifier_bounds() {
     Fixture bad_heap({std::string(16, 'x')});
     bad_heap.arena.put(bad_heap.contents[0] + 0x38, std::uintptr_t{0xdeadbeef});
@@ -207,7 +212,7 @@ void pointers_and_identifier_bounds() {
     require(parse(cid, capture).reason == DropReason::invalid_conversation_id,
             "conversation_identifier");
     auto missing = parse_on_notification(400, reinterpret_cast<void*>(1),
-                                            kSyntheticModuleBase, nullptr, nullptr);
+                                            kSyntheticModuleBase, kSyntheticVtables, nullptr, nullptr);
     require(missing.reason == DropReason::missing_sink, "missing_sink_no_read");
 }
 
