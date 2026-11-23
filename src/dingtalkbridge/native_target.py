@@ -8,6 +8,10 @@ import os
 from .native_controller import configured_target_path
 
 
+class TargetPathMismatch(ValueError):
+    """A visible DingTalk window belongs to a different executable path."""
+
+
 def discover_targets() -> list[dict[str, int]]:
     """Enumerate only window/process metadata; never read titles or message text."""
     if os.name != "nt":
@@ -28,10 +32,12 @@ def discover_targets() -> list[dict[str, int]]:
     kernel.QueryFullProcessImageNameW.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)]
     kernel.CloseHandle.argtypes = [wintypes.HANDLE]
     found: list[dict[str, int]] = []
+    path_mismatch = False
 
     @callback_type
     def visit(hwnd: int, _parameter: int) -> bool:
         """Keep visible windows whose process image exactly matches this build target."""
+        nonlocal path_mismatch
         if not user.IsWindowVisible(hwnd):
             return True
         pid = wintypes.DWORD()
@@ -46,6 +52,7 @@ def discover_targets() -> list[dict[str, int]]:
             if os.path.basename(path.value).lower() != "dingtalk.exe":
                 return True
             if expected_path and os.path.normcase(path.value) != os.path.normcase(expected_path):
+                path_mismatch = True
                 return True
             rect = wintypes.RECT()
             if user.GetWindowRect(hwnd, ctypes.byref(rect)):
@@ -64,6 +71,8 @@ def discover_targets() -> list[dict[str, int]]:
             raise ValueError("Default desktop enumeration failed")
     finally:
         user.CloseDesktop(desktop)
+    if not found and path_mismatch:
+        raise TargetPathMismatch("visible DingTalk executable differs from the configured build target")
     return sorted(found, key=lambda row: row["area"], reverse=True)
 
 

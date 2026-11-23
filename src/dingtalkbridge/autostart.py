@@ -18,7 +18,7 @@ from .native_controller import (
     CollectorError, _acquire_lock, _stamp, _validate_build, _write_status,
     default_controller_path, run_collect,
 )
-from .native_target import select_target
+from .native_target import TargetPathMismatch, select_target
 from .store import Store
 
 IS_WINDOWS = os.name == "nt"
@@ -139,9 +139,10 @@ def run_worker(config: Config) -> int:
             while not stop_path.exists():
                 try:
                     target = select_target()
-                except ValueError:
+                except ValueError as error:
+                    status = "target_path_mismatch" if isinstance(error, TargetPathMismatch) else "waiting_for_client"
                     _write_status(config, {
-                        "status": "waiting_for_client", "mode": "native_capture",
+                        "status": status, "mode": "native_capture",
                         "running": True, "heartbeat_at": _stamp(), "interval_seconds": 2,
                         "database_path_hash": hashlib.sha256(str(store.path.resolve()).casefold().encode("utf-8")).hexdigest(),
                     })

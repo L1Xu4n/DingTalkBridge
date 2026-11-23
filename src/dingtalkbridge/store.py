@@ -367,7 +367,7 @@ class Store:
                                        "native_callback_verified": False}
             observation = result.get("status")
             summary["last_observation_status"] = observation if isinstance(observation, str) and observation in {
-                "starting", "available", "waiting_for_client", "no_visible_window", "process_not_running",
+                "starting", "available", "waiting_for_client", "target_path_mismatch", "no_visible_window", "process_not_running",
                 "collector_error", "stopped", "unavailable", "unsupported", "isolated_desktop",
                 "unsafe_geometry", "blank_capture", "capture_unavailable", "ocr_unavailable",
                 "no_text", "target_changed", "dpi_unavailable", "completed", "rejected", "cancelled", "failed"
@@ -457,6 +457,9 @@ class Store:
                 fresh = age is not None and -5 <= age <= max(15, 3 * interval)
                 summary["running"] = fresh
                 summary["status"] = "recent_heartbeat" if fresh else "stale"
+                if fresh and observation == "target_path_mismatch":
+                    summary["status"] = observation
+                    summary["running"] = False
                 summary["heartbeat_age_seconds"] = round(age, 3) if age is not None else None
             else:
                 summary["status"] = "stopped"
