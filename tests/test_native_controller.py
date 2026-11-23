@@ -241,6 +241,30 @@ class NativeControllerTests(unittest.TestCase):
                 supervisor.run_collect(replace(self.config, db_path=self.directory / "other.sqlite3"), self.store, args)
             popen.assert_not_called()
 
+    def test_production_build_allows_only_the_explicit_sibling_client_path(self):
+        """Read both client paths from a new build and keep legacy builds exact."""
+        manifest_path = self.production.parent / "build.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        primary = r"C:\DingTalk\main\current_new\DingTalk.exe"
+        alternate = r"C:\DingTalk\MAIN\current\DingTalk.exe"
+        manifest["target_path"] = primary
+        with patch.object(supervisor, "default_controller_path", return_value=self.production):
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            self.assertEqual(supervisor.configured_target_paths(), (primary,))
+            manifest["alternate_target_path"] = alternate
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            self.assertEqual(supervisor.configured_target_paths(), (primary, alternate))
+            supervisor._validate_build(self.production, synthetic=False)
+            for unrelated in (r"C:\OtherInstall\main\current\DingTalk.exe",
+                              r"C:\DingTalk\main\current_backup\DingTalk.exe"):
+                with self.subTest(unrelated=unrelated):
+                    manifest["alternate_target_path"] = unrelated
+                    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+                    with self.assertRaisesRegex(supervisor.CollectorError, "build_target_mismatch"):
+                        supervisor.configured_target_paths()
+                    with self.assertRaisesRegex(supervisor.CollectorError, "build_target_mismatch"):
+                        supervisor._validate_build(self.production, synthetic=False)
+
     def test_startup_and_heartbeat_timeouts_request_cooperative_stop(self):
         """Verify startup and heartbeat timeouts request cooperative stop."""
         process = FakeProcess(WaitingOutput())

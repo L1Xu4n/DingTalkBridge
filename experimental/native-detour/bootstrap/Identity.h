@@ -92,8 +92,23 @@ inline bool WindowThreadBound(HWND hwnd,DWORD pid,DWORD tid) {
     DWORD actualPid=0;DWORD actualTid=GetWindowThreadProcessId(hwnd,&actualPid);
     return hwnd&&IsWindow(hwnd)&&actualPid==pid&&actualTid==tid&&tid!=0&&GetAncestor(hwnd,GA_ROOT)==hwnd;
 }
-// 限制目标为配置的钉钉程序路径。
-inline bool LockedTarget(const ProcessIdentity& target) { return SamePath(target.path,kExpectedTargetPath); }
+// 只接受本构建的完整程序路径，并选出与该路径配对的 MainFrame.dll。
+inline const wchar_t* ExpectedMainFramePath(const std::wstring& image) {
+    if (SamePath(image,kExpectedTargetPath)) return kExpectedMainFramePath;
+    if (SamePath(image,kAlternateTargetPath)) return kAlternateMainFramePath;
+    return nullptr;
+}
+// 按配对的完整路径取得已加载且路径核验通过的 MainFrame.dll。
+inline HMODULE VerifiedMainFrameModule(const wchar_t* expectedPath) {
+    if (!expectedPath) return nullptr;
+    HMODULE module=GetModuleHandleW(expectedPath);
+    if (!module) return nullptr;
+    wchar_t path[32768]{};
+    DWORD length=GetModuleFileNameW(module,path,32768);
+    return length&&length<32768&&SamePath(std::wstring(path,length),expectedPath)?module:nullptr;
+}
+// 限制目标为本构建许可的完整程序路径。
+inline bool LockedTarget(const ProcessIdentity& target) { return ExpectedMainFramePath(target.path)!=nullptr; }
 // 限制启动方为本构建的控制器路径。
 inline bool LockedController(const ProcessIdentity& controller) { return SamePath(controller.path,kExpectedControllerPath); }
 }

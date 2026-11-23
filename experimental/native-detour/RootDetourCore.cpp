@@ -1,8 +1,7 @@
 // Layout-compatible read-only notification tap; no whole-client hash gate.
 // The module and its sole trampoline remain pinned for this process lifetime.
 #define NOMINMAX
-#include "bootstrap/BridgeProtocol.h"
-#include "BuildIdentity.h"
+#include "bootstrap/Identity.h"
 #include "payload/payload_parser.h"
 #include "payload/safe_read.h"
 #include "history/HistoryReader.h"
@@ -24,8 +23,6 @@ namespace {
 namespace payload = dingtalkbridge::native::payload;
 using Dispatch = void (__fastcall *)(void*, std::int32_t, const void*, const void*);
 std::string g_client_version = "unknown";
-constexpr auto& kTargetPath = kExpectedTargetPath;
-constexpr auto& kMainFramePath = kExpectedMainFramePath;
 constexpr std::uintptr_t kDispatchRva = 0x36c7d90;
 constexpr BYTE kEntryBytes[32] = {0x40,0x55,0x53,0x56,0x57,0x41,0x54,0x41,
     0x55,0x41,0x56,0x41,0x57,0x48,0x8d,0xac,0x24,0xe8,0xfe,0xff,
@@ -89,16 +86,12 @@ std::wstring OwnImage() {
     if (!count || count>=path.size()) return {};
     return {path.data(),count};
 }
-// 按 Windows 路径规则比较目标路径。
-bool SamePath(const std::wstring& a,const wchar_t* b) {
-    return CompareStringOrdinal(a.c_str(),-1,b,-1,TRUE)==CSTR_EQUAL;
-}
-// Read the actual client file version for metadata, never as a support gate.
-std::string ClientVersion() {
-    DWORD ignored=0; DWORD size=GetFileVersionInfoSizeW(kTargetPath,&ignored);
+// Read version metadata from the verified running image path.
+std::string ClientVersion(const std::wstring& image) {
+    DWORD ignored=0; DWORD size=GetFileVersionInfoSizeW(image.c_str(),&ignored);
     if (!size) return "unknown";
     std::vector<BYTE> bytes(size);
-    if (!GetFileVersionInfoW(kTargetPath,0,size,bytes.data())) return "unknown";
+    if (!GetFileVersionInfoW(image.c_str(),0,size,bytes.data())) return "unknown";
     VS_FIXEDFILEINFO* info=nullptr; UINT length=0;
     if (!VerQueryValueW(bytes.data(),L"\\",reinterpret_cast<void**>(&info),&length) || length<sizeof(*info)) return "unknown";
     char version[80]{};
@@ -119,25 +112,26 @@ bool CompatibleType(std::uintptr_t base,std::uintptr_t vtable,std::uint32_t type
     if(fields[0]!=1 || fields[1]!=0 || fields[3]!=type || locator!=base+fields[5]) return false;
     return payload::detail::safe_read(reinterpret_cast<void*>(base+type+16),actual,length) && std::memcmp(actual,name,length)==0;
 }
-// 核对目标进程、动态代码策略、入口指令和对象类型布局。
+// 核对目标进程、动态代码策略、配对模块、入口指令和对象类型布局。
 bool Profile(const BootstrapRequest& request,void*& target,std::uintptr_t& message_base) {
     if (request.target_pid!=GetCurrentProcessId() || Creation(GetCurrentProcess())!=request.target_creation_time) return false;
     PROCESS_MITIGATION_DYNAMIC_CODE_POLICY dynamic{};
     if (!GetProcessMitigationPolicy(GetCurrentProcess(),ProcessDynamicCodePolicy,&dynamic,sizeof(dynamic)) || dynamic.ProhibitDynamicCode) return false;
+    const auto image=OwnImage();
+    const wchar_t* expectedMainFrame=ExpectedMainFramePath(image);
+    if (!expectedMainFrame) return false;
 #if defined(DTB_NATIVE_SYNTHETIC) && DTB_NATIVE_SYNTHETIC
     if (request.build_flavor!=2) return false;
-    auto image=OwnImage(); auto slash=image.find_last_of(L"\\/");
+    auto slash=image.find_last_of(L"\\/");
     if (image.substr(slash==std::wstring::npos?0:slash+1)!=L"DingTalkBridgeNativeSyntheticHost.exe") return false;
     target=reinterpret_cast<void*>(GetProcAddress(GetModuleHandleW(nullptr),"DtbSyntheticDispatch"));
     message_base=0x180000000ULL; // Values used only by this separate owned fixture.
     return target!=nullptr && (g_install_state!=2 || (target==g_target && ByteMatch(target,g_installed_entry)));
 #else
-    if (request.build_flavor!=1 || !SamePath(OwnImage(),kTargetPath)) return false;
-    HMODULE module=GetModuleHandleW(kMainFramePath); if (!module) return false;
-    std::array<wchar_t,32768> path{};
-    DWORD count=GetModuleFileNameW(module,path.data(),static_cast<DWORD>(path.size()));
-    if (!count || count>=path.size() || !SamePath(std::wstring(path.data(),count),kMainFramePath)) return false;
-    g_client_version = ClientVersion();
+    if (request.build_flavor!=1) return false;
+    HMODULE module=VerifiedMainFrameModule(expectedMainFrame);
+    if (!module) return false;
+    g_client_version = ClientVersion(image);
     target=reinterpret_cast<void*>(reinterpret_cast<std::uintptr_t>(module)+kDispatchRva);
     message_base=reinterpret_cast<std::uintptr_t>(module);
     if (!CompatibleType(message_base,0x709e9e0,0x9df1e38,".?AVMessage@object@mj@@") ||

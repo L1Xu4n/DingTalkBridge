@@ -15,7 +15,7 @@ void Fail(bridge_native::SharedState* state,bridge_native::BootstrapError error)
     InterlockedExchange(&state->Active,0);InterlockedExchange(&state->worker_alive,0);
     InterlockedExchange(&state->status,LONG(bridge_native::BootstrapStatus::Rejected));
 }
-// 在钉钉进程内独立核验请求、控制器和目标窗口身份。
+// 在目标进程内独立核验请求、控制器、窗口及配对模块身份。
 bool Validate(const bridge_native::BootstrapRequest& r,const Work& work,HANDLE& controller) {
     using namespace bridge_native;
     if(r.magic!=kProtocolMagic||r.version!=kProtocolVersion||r.bytes!=sizeof(r)||r.build_flavor!=kBuildFlavor||
@@ -24,8 +24,10 @@ bool Validate(const bridge_native::BootstrapRequest& r,const Work& work,HANDLE& 
        memcmp(r.nonce,work.nonce,16)!=0||MappingName(work.nonce)!=r.mapping_name||PipeName(r.controller_pid,r.nonce)!=r.pipe_name||
        !WindowThreadBound(work.hwnd,r.target_pid,r.target_thread_id))return false;
     ProcessIdentity target{},caller{};
-    if(!ReadIdentity(GetCurrentProcess(),r.target_pid,target)||!LockedTarget(target)||
+    if(!ReadIdentity(GetCurrentProcess(),r.target_pid,target)||
        !MatchIdentity(target,r.target_pid,r.target_creation_time,r.target_session_id,r.target_integrity_rid,r.target_image_path,r.target_sid))return false;
+    const wchar_t* expectedMainFrame=ExpectedMainFramePath(target.path);
+    if(!expectedMainFrame)return false;
     wchar_t module[32768]{};DWORD n=GetModuleFileNameW(g_module,module,32768);
     if(!n||n>=32768||!SamePath(module,kExpectedDllPath))return false;
     controller=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION|SYNCHRONIZE,FALSE,r.controller_pid);
@@ -33,8 +35,7 @@ bool Validate(const bridge_native::BootstrapRequest& r,const Work& work,HANDLE& 
        !MatchIdentity(caller,r.controller_pid,r.controller_creation_time,r.controller_session_id,r.controller_integrity_rid,r.controller_image_path,r.controller_sid)||
        WaitForSingleObject(controller,0)!=WAIT_TIMEOUT)return false;
 #if !BRIDGE_SYNTHETIC
-    HMODULE main=GetModuleHandleW(L"MainFrame.dll");wchar_t mainPath[32768]{};
-    if(!main||!GetModuleFileNameW(main,mainPath,32768)||!SamePath(mainPath,kExpectedMainFramePath))return false;
+    if(!VerifiedMainFrameModule(expectedMainFrame))return false;
 #endif
     return true;
 }
