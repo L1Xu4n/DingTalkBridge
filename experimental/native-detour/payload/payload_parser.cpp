@@ -118,17 +118,19 @@ std::string decimal_id(std::int64_t value) {
     return std::string(buffer, converted.ptr);
 }
 
+// Copy a notification batch using the vtables supplied by its verified client layout.
 ParseResult parse_selected(const void* details_wrapper, std::uintptr_t base,
-                           void* context, OwnedMessageSink sink) {
+                           VtableRvas vtables, void* context, OwnedMessageSink sink) {
     ParseResult result;
     if (!sink) { result.reason = DropReason::missing_sink; return result; }
-    if (!base || (base & 0xffff) != 0 ||
-        base > (std::numeric_limits<std::uintptr_t>::max)() - kTextContentVtableRva) {
+    const auto remaining = (std::numeric_limits<std::uintptr_t>::max)() - base;
+    if (!base || (base & 0xffff) != 0 || !vtables.message || !vtables.text ||
+        vtables.message > remaining || vtables.text > remaining) {
         result.reason = DropReason::invalid_module_base;
         return result;
     }
-    const auto expected_message_vtable = base + kMessageVtableRva;
-    const auto expected_text_vtable = base + kTextContentVtableRva;
+    const auto expected_message_vtable = base + vtables.message;
+    const auto expected_text_vtable = base + vtables.text;
     PointerWrapper details{};
     if (!read_pod(reinterpret_cast<std::uintptr_t>(details_wrapper), details)) {
         result.reason = DropReason::unreadable_payload;
@@ -255,8 +257,9 @@ ParseResult parse_selected(const void* details_wrapper, std::uintptr_t base,
 
 }  // namespace
 
+// Select the notification before reading its arguments and contain parser failures.
 ParseResult parse_on_notification(std::int32_t event_type, const void* details_wrapper,
-                                 std::uintptr_t main_frame_base, void* sink_context,
+                                 std::uintptr_t main_frame_base, VtableRvas vtables, void* sink_context,
                                  OwnedMessageSink sink) noexcept {
     if (event_type != kNewMessageNotification) {
         ParseResult result;
@@ -264,7 +267,7 @@ ParseResult parse_on_notification(std::int32_t event_type, const void* details_w
         return result;
     }
     try {
-        return parse_selected(details_wrapper, main_frame_base, sink_context, sink);
+        return parse_selected(details_wrapper, main_frame_base, vtables, sink_context, sink);
     } catch (const std::bad_alloc&) {
         ParseResult result;
         result.reason = DropReason::allocation_failure;

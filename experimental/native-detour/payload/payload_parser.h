@@ -7,12 +7,17 @@
 namespace dingtalkbridge::native::payload {
 
 inline constexpr std::int32_t kNewMessageNotification = 400;
-inline constexpr std::uintptr_t kMessageVtableRva = 0x709e9e0;
-inline constexpr std::uintptr_t kTextContentVtableRva = 0x70d0e48;
 inline constexpr std::size_t kMaximumBatchNodes = 512;
 inline constexpr std::size_t kMaximumTextBytes = 64 * 1024;
 inline constexpr std::size_t kMaximumConversationBytes = 1024;
 inline constexpr std::size_t kMaximumBatchCopiedBytes = 1024 * 1024;
+
+struct VtableRvas {
+    std::uintptr_t message;
+    std::uintptr_t text;
+};
+
+inline constexpr VtableRvas kSyntheticVtables{0x2000, 0x3000};
 
 // These are owned strings, independent of the product's borrowed payload.
 // They deliberately contain no inferred direction, sender name, or timestamp.
@@ -68,6 +73,7 @@ ParseResult parse_on_notification(
     std::int32_t event_type,
     const void* details_wrapper,
     std::uintptr_t main_frame_base,
+    VtableRvas vtables,
     void* sink_context,
     OwnedMessageSink sink) noexcept;
 

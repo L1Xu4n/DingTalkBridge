@@ -63,7 +63,7 @@ void RpcSuccess(void* context, Shared, Shared response) noexcept {
     target.finished = true;
     try {
         std::int64_t current = 0;
-        if (!response || !ReadAccountUid(target.base, current) || current != target.account)
+        if (!response || !ReadAccountUid(target.base, kClient905.account, current) || current != target.account)
             throw std::runtime_error("account_changed");
         using Body = const std::string& (__fastcall *)(void*);
         const auto& bytes = Export<Body>("?body@Message@lwp@gaea@@QEAAAEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@XZ")(response.get());
@@ -247,7 +247,7 @@ void DownloadInlineImage(std::uintptr_t base, const std::string& media,
         // Validate the account again before publishing bytes from the asynchronous SDK callback.
         try {
             std::int64_t current = 0;
-            if (!ReadAccountUid(base, current) || current != account) throw std::runtime_error("account_changed");
+            if (!ReadAccountUid(base, kClient905.account, current) || current != account) throw std::runtime_error("account_changed");
             std::filesystem::copy_file(partial, target, std::filesystem::copy_options::overwrite_existing);
             std::filesystem::remove(partial);
         } catch (...) { Fail(failure); }
@@ -281,7 +281,7 @@ void DownloadCloudFile(std::uintptr_t base, const std::string& cid, const std::s
         // A cache hit may return an existing SDK path, so copy the bounded result path after account validation.
         try {
             std::int64_t current = 0;
-            if (!ReadAccountUid(base, current) || current != account) throw std::runtime_error("account_changed");
+            if (!ReadAccountUid(base, kClient905.account, current) || current != account) throw std::runtime_error("account_changed");
             auto source = partial;
             if (!std::filesystem::is_regular_file(source) || std::filesystem::file_size(source) == 0) {
                 const auto& path = *reinterpret_cast<const std::string*>(reinterpret_cast<const char*>(&result) + 0x28);

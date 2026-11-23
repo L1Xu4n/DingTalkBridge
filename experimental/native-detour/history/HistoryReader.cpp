@@ -31,10 +31,6 @@ using Destroy = void (__fastcall *)(void*);
 using Query = void (__fastcall *)(void*, const std::string&, int, std::int64_t, Success, Failure);
 static_assert(sizeof(std::string)==32 && sizeof(Fields)==16 && sizeof(Rows)==24 && sizeof(Success)==64,
               "Requires the release MSVC x64 STL ABI");
-constexpr std::uintptr_t kLatest=0x6526e10, kQuery=0x652b580, kDestroy=0x10d7b50;
-constexpr unsigned char kLatestBytes[32]={0x48,0x89,0x5c,0x24,0x08,0x48,0x89,0x74,0x24,0x20,0x57,0x41,0x54,0x41,0x55,0x41,0x56,0x41,0x57,0x48,0x81,0xec,0x80,0x02,0x00,0x00,0x48,0x8b,0x05,0xe7,0xf2,0x6e};
-constexpr unsigned char kQueryBytes[32]={0x40,0x53,0x56,0x57,0x41,0x54,0x41,0x55,0x41,0x56,0x41,0x57,0x48,0x81,0xec,0x10,0x03,0x00,0x00,0x48,0x8b,0x05,0x7e,0xab,0x6e,0x03,0x48,0x33,0xc4,0x48,0x89,0x84};
-constexpr unsigned char kDestroyBytes[32]={0x48,0x89,0x5c,0x24,0x10,0x57,0x48,0x83,0xec,0x20,0x48,0x8b,0x19,0x48,0x8b,0xf9,0x48,0x85,0xdb,0x74,0x7f,0x48,0x89,0x74,0x24,0x30,0x48,0x8b,0x71,0x08,0x48,0x3b};
 constexpr std::size_t kMaxFrame=512*1024, kMaxValue=128*1024, kMaxBatch=8*1024*1024;
 
 // Check a selected entry signature, without requiring a whole-client file hash.
@@ -103,14 +99,15 @@ struct Pending {
 };
 
 // Grow the native list request until exhausted; release each result using its own destructor.
-Rows Conversations(std::uintptr_t base,void* context,Active active) {
-    const auto destroy=reinterpret_cast<Destroy>(base+kDestroy);
+Rows Conversations(std::uintptr_t base,const HistoryLayout& layout,void* context,Active active) {
+    const auto latest=reinterpret_cast<Latest>(base+layout.latest.rva);
+    const auto destroy=reinterpret_cast<Destroy>(base+layout.destroy.rva);
     int maximum=500;
     while(active(context)) {
         alignas(8) std::array<unsigned char,sizeof(Rows)> storage{};
         Rows result;
         try {
-            reinterpret_cast<Latest>(base+kLatest)(nullptr,storage.data(),maximum);
+            latest(nullptr,storage.data(),maximum);
             const auto& source=*reinterpret_cast<const Rows*>(storage.data());
             if(source.size()>static_cast<std::size_t>(maximum))throw std::runtime_error("conversation_result_invalid");
             result.reserve(source.size());
@@ -129,13 +126,13 @@ Rows Conversations(std::uintptr_t base,void* context,Active active) {
 }
 
 // Invoke the client's existing asynchronous query; callback ownership outlives a timeout safely.
-std::shared_ptr<Pending> Page(std::uintptr_t base,const std::string& cid,std::int64_t cursor,
+std::shared_ptr<Pending> Page(std::uintptr_t base,const HistoryLayout& layout,const std::string& cid,std::int64_t cursor,
                              void* context,Active active) {
     auto pending=std::make_shared<Pending>();
     // MSVC std::function copies dispatch through this DLL's clone/delete virtual methods.
     Success success=[pending](const Rows& rows,const Fields& extra){pending->Complete(rows,extra);};
     Failure failure=[pending](const std::string&){pending->Fail();};
-    reinterpret_cast<Query>(base+kQuery)(nullptr,cid,100,cursor,std::move(success),std::move(failure));
+    reinterpret_cast<Query>(base+layout.query.rva)(nullptr,cid,100,cursor,std::move(success),std::move(failure));
     const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(8);
     std::unique_lock<std::mutex> lock(pending->mutex);
     while(!pending->done && active(context) && std::chrono::steady_clock::now()<deadline)
@@ -178,19 +175,18 @@ void Delay(void* context,Active active,unsigned milliseconds) noexcept {
 }
 
 // Only follow the proven current-user pointer, vtable and two scalar fields; no credentials are read.
-bool ReadAccountUid(std::uintptr_t base,std::int64_t& uid) noexcept {
-    constexpr unsigned char initialized[]={0x0f,0xb6,0x41,0x08,0xc3};
-    constexpr unsigned char getter[]={0x48,0x8b,0x81,0x10,0x03,0x00,0x00,0xc3};
-    if(!Matches(base+0x128c810,initialized,sizeof(initialized)) || !Matches(base+0x3406a10,getter,sizeof(getter))) return false;
+bool ReadAccountUid(std::uintptr_t base,const AccountLayout& layout,std::int64_t& uid) noexcept {
+    if(!Matches(base+layout.initialized.rva,layout.initialized.bytes.data(),layout.initialized.bytes.size()) ||
+       !Matches(base+layout.uid_getter.rva,layout.uid_getter.bytes.data(),layout.uid_getter.bytes.size())) return false;
     std::uintptr_t object=0,vtable=0;unsigned char ready=0;uid=0;
-    return payload::detail::safe_read(reinterpret_cast<void*>(base+0xa1e7de8),&object,sizeof(object)) && object>1
-        && payload::detail::safe_read(reinterpret_cast<void*>(object),&vtable,sizeof(vtable)) && vtable==base+0x86aef20
+    return payload::detail::safe_read(reinterpret_cast<void*>(base+layout.singleton),&object,sizeof(object)) && object>1
+        && payload::detail::safe_read(reinterpret_cast<void*>(object),&vtable,sizeof(vtable)) && vtable==base+layout.vtable
         && payload::detail::safe_read(reinterpret_cast<void*>(object+8),&ready,1) && ready!=0
         && payload::detail::safe_read(reinterpret_cast<void*>(object+0x310),&uid,sizeof(uid)) && uid>0;
 }
 
 // Use the message service's media downloader so protected image bytes stay in the logged-in client.
-void DownloadMedia(std::uintptr_t base,const std::string& cid,std::int64_t mid,
+void DownloadMedia(std::uintptr_t base,const ClientLayout& layout,const std::string& cid,std::int64_t mid,
                    const std::filesystem::path& target,const std::filesystem::path& failure,std::int64_t account,
                    std::int64_t timestamp,void* context,Active active) {
     constexpr unsigned char service_entry[]={0x48,0x89,0x5c,0x24,0x10,0x48,0x89,0x6c,0x24,0x18,0x48,0x89,0x74,0x24,0x20,0x57,0x48,0x83,0xec,0x70,0x48,0x8b,0x05,0x3d,0x6b,0x51,0x06,0x48,0x33,0xc4,0x48,0x89};
@@ -215,9 +211,9 @@ void DownloadMedia(std::uintptr_t base,const std::string& cid,std::int64_t mid,
     if(conversation)reinterpret_cast<GetMessage>(base+0x3759fe0)(conversation.get(),&message,cid,mid);
     if(!message) {
         // Historical queries also populate the client's message cache for an older media request.
-        auto page=Page(base,cid,timestamp>0?timestamp+1:0,context,active);
+        auto page=Page(base,layout.history,cid,timestamp>0?timestamp+1:0,context,active);
         std::int64_t current=0;
-        if(page->failed||!ReadAccountUid(base,current)||current!=account)throw std::runtime_error("message_query_failed");
+        if(page->failed||!ReadAccountUid(base,layout.account,current)||current!=account)throw std::runtime_error("message_query_failed");
         conversation.reset();
         reinterpret_cast<GetConversation>(table[0x680/sizeof(void*)])(service.get(),&conversation,cid);
         if(conversation)reinterpret_cast<GetMessage>(base+0x3759fe0)(conversation.get(),&message,cid,mid);
@@ -226,10 +222,11 @@ void DownloadMedia(std::uintptr_t base,const std::string& cid,std::int64_t mid,
     MediaFailure failed=[failure](const OpaqueError&) {
         try {std::ofstream result(failure);result<<"media_download_failed\n";}catch(...){}
     };
-    MediaSuccess succeeded=[base,account,target,failed](const Shared&,const std::string&,const std::string& path) {
+    MediaSuccess succeeded=[base,account_layout=&layout.account,account,target,failed](const Shared&,const std::string&,const std::string& path) {
+        // Validate the same account again before publishing the downloaded file.
         try {
             std::int64_t current=0;
-            if(!ReadAccountUid(base,current)||current!=account)throw std::runtime_error("account_changed");
+            if(!ReadAccountUid(base,*account_layout,current)||current!=account)throw std::runtime_error("account_changed");
             const auto source=std::filesystem::u8path(path);
             if(!source.is_absolute()||!std::filesystem::is_regular_file(source))throw std::runtime_error("media_path_invalid");
             std::filesystem::copy_file(source,target,std::filesystem::copy_options::overwrite_existing);
@@ -239,9 +236,27 @@ void DownloadMedia(std::uintptr_t base,const std::string& cid,std::int64_t mid,
     reinterpret_cast<Download>(base+0x3afa340)(service.get(),message,false,std::string{},succeeded,failed);
 }
 
-// Invoke the existing file-download binding with a native JSON list and native callbacks.
-// Keeping construction/destruction inside dtfbase avoids guessing private request object layouts.
-void DownloadRequests(std::uintptr_t base,const BootstrapRequest& request,std::int64_t account,void* context,Active active) noexcept {
+// Publish the fixed error through the private request transport, then remove the serviced request.
+void RejectUnsupportedRequest(const std::filesystem::path& request,const std::filesystem::path& outcome) {
+    auto partial=outcome;
+    partial+=L".partial";
+    std::ofstream stream(partial,std::ios::binary|std::ios::trunc);
+    stream<<"layout_unsupported\n";
+    stream.close();
+    std::error_code error;
+    if(stream) {
+        std::filesystem::rename(partial,outcome,error);
+        if(!error) {
+            std::filesystem::remove(request,error);
+            return;
+        }
+    }
+    std::filesystem::remove(partial,error);
+}
+
+// Dispatch verified legacy file operations, or promptly complete requests for an unsupported attachment layout.
+void DownloadRequests(std::uintptr_t base,const ClientLayout& layout,const BootstrapRequest& request,
+                      std::int64_t account,void* context,Active active) noexcept {
     if(!request.attachment_request_directory[0])return;
     constexpr unsigned char entry[]={0x48,0x89,0x5c,0x24,0x18,0x55,0x56,0x57,0x41,0x56,0x41,0x57,0x48,0x8d,0xac,0x24,0x20,0xfc,0xff,0xff,0x48,0x81,0xec,0xe0,0x04,0x00,0x00,0x48,0x8b,0x05,0x66,0x45};
     using JsonRead=void* (__fastcall *)(void*,const void*);
@@ -259,7 +274,12 @@ void DownloadRequests(std::uintptr_t base,const BootstrapRequest& request,std::i
                 std::ifstream source(item.path(),std::ios::binary);
                 std::string uid,json;std::getline(source,uid);std::getline(source,json);
                 std::int64_t current=0;
-                if(Integer(uid)!=account||!ReadAccountUid(base,current)||current!=account)throw std::runtime_error("account_changed");
+                if(Integer(uid)!=account||!ReadAccountUid(base,layout.account,current)||current!=account)throw std::runtime_error("account_changed");
+                if(!layout.legacy_attachment_entries) {
+                    source.close();
+                    RejectUnsupportedRequest(item.path(),outcome);
+                    continue;
+                }
                 if(json=="group-space" || json=="list-directory") {
                     std::string body; std::getline(source,body);
                     auto result=item.path(); result.replace_extension(L".result");
@@ -278,7 +298,7 @@ void DownloadRequests(std::uintptr_t base,const BootstrapRequest& request,std::i
                     std::string cid,mid,path,timestamp;std::getline(source,cid);std::getline(source,mid);std::getline(source,path);std::getline(source,timestamp);
                     const auto target=std::filesystem::u8path(path);
                     if(cid.empty()||Integer(mid)<=0||!target.is_absolute())throw std::runtime_error("media_request_invalid");
-                    DownloadMedia(base,cid,Integer(mid),target,outcome,account,Integer(timestamp),context,active);
+                    DownloadMedia(base,layout,cid,Integer(mid),target,outcome,account,Integer(timestamp),context,active);
                 } else {
                     if(!Matches(base+0x61b1b90,entry,sizeof(entry)))throw std::runtime_error("layout_unsupported");
                     HMODULE module=GetModuleHandleW(L"dtfbase.dll");
@@ -302,26 +322,27 @@ void DownloadRequests(std::uintptr_t base,const BootstrapRequest& request,std::i
     } catch(...) {}
 }
 
-// Round-robin one page per conversation so large histories cannot monopolize the first pass.
-void Run(std::uintptr_t base,const BootstrapRequest& request,SharedState* state,
+// Verify all history entries, then round-robin one page per conversation on this worker.
+void Run(std::uintptr_t base,const ClientLayout& layout,const BootstrapRequest& request,SharedState* state,
          void* context,Active active,Emit emit) noexcept {
     InterlockedExchange(&state->history_running,1);
     try {
-        if(!Matches(base+kLatest,kLatestBytes,32) || !Matches(base+kQuery,kQueryBytes,32) || !Matches(base+kDestroy,kDestroyBytes,32)) {
+        if(!MatchesImageEntry(base,layout.history.latest) || !MatchesImageEntry(base,layout.history.query) ||
+           !MatchesImageEntry(base,layout.history.destroy)) {
             InterlockedExchange(&state->history_stage,1);
             InterlockedExchange(&state->history_running,0);return;
         }
         std::int64_t account=0;
-        while(active(context) && !ReadAccountUid(base,account)) {
+        while(active(context) && !ReadAccountUid(base,layout.account,account)) {
             InterlockedExchange(&state->history_stage,2);Delay(context,active,1000);
         }
         std::map<std::string,std::string> completed;
         while(active(context)) {
             std::int64_t current=0;
-            if(!ReadAccountUid(base,current)||current!=account) {InterlockedExchange(&state->history_stage,7);break;}
+            if(!ReadAccountUid(base,layout.account,current)||current!=account) {InterlockedExchange(&state->history_stage,7);break;}
             InterlockedExchange(&state->history_stage,3);
-            DownloadRequests(base,request,account,context,active);
-            auto conversations=Conversations(base,context,active);
+            DownloadRequests(base,layout,request,account,context,active);
+            auto conversations=Conversations(base,layout.history,context,active);
             InterlockedExchange64(&state->history_conversations,static_cast<LONG64>(conversations.size()));
             struct Scan {
                 Fields conversation;
@@ -342,17 +363,17 @@ void Run(std::uintptr_t base,const BootstrapRequest& request,SharedState* state,
                 auto scan=std::move(pending.front());
                 pending.pop_front();
                 const auto cid=Field(scan.conversation,"cid"),last=Field(scan.conversation,"lastMid");
-                DownloadRequests(base,request,account,context,active);
-                if(!ReadAccountUid(base,current)||current!=account) {InterlockedExchange(&state->history_stage,7);throw std::runtime_error("account_changed");}
+                DownloadRequests(base,layout,request,account,context,active);
+                if(!ReadAccountUid(base,layout.account,current)||current!=account) {InterlockedExchange(&state->history_stage,7);throw std::runtime_error("account_changed");}
                 InterlockedExchange(&state->history_stage,4);
-                auto page=Page(base,cid,scan.cursor,context,active);
+                auto page=Page(base,layout.history,cid,scan.cursor,context,active);
                 if(!active(context))break;
                 if(page->failed) {InterlockedIncrement64(&state->history_errors);continue;}
                 InterlockedIncrement64(&state->history_pages);
                 bool known=false;
                 for(const auto& row:page->rows) {
                     if(!active(context))break;
-                    if(!ReadAccountUid(base,current)||current!=account) {InterlockedExchange(&state->history_stage,7);throw std::runtime_error("account_changed");}
+                    if(!ReadAccountUid(base,layout.account,current)||current!=account) {InterlockedExchange(&state->history_stage,7);throw std::runtime_error("account_changed");}
                     if(Field(row,"cid")!=cid || Field(row,"mid").empty())continue;
                     if(!scan.previous_mid.empty() && Field(row,"mid")==scan.previous_mid)known=true;
                     if(!emit(context,Frame(request,account,scan.conversation,row)))throw std::runtime_error("delivery_stopped");
@@ -375,7 +396,7 @@ void Run(std::uintptr_t base,const BootstrapRequest& request,SharedState* state,
             }
             InterlockedExchange(&state->history_stage,5);
             for(unsigned elapsed=0;elapsed<request.history_interval_seconds*1000 && active(context);elapsed+=200) {
-                DownloadRequests(base,request,account,context,active);
+                DownloadRequests(base,layout,request,account,context,active);
                 Delay(context,active,200);
             }
         }
