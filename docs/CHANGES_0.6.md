@@ -44,4 +44,4 @@ python -m pip install -e ".[attachments]"
 
 Personal agent 已完成方案梳理，消息消费、定时触发、主动投递和回复关联仍在待办中。
 
-[查询说明](QUERY.md) · [附件说明与函数表](ATTACHMENTS.md) · [待办](../TODO.md)
+[查询说明](QUERY.md) · [附件说明与函数表](ATTACHMENTS.md)

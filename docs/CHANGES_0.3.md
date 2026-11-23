@@ -15,6 +15,6 @@
 | `scripts/Verify-Native-Mcp.py` | 真实 stdio MCP 核对用户测试文本，仅输出验证布尔值和计数。 |
 | `tests/test_native_controller.py` / `test_native_receive.py` | 恢复已有测试，适配新 CLI、停止行为与无客户端哈希门槛。 |
 | `pyproject.toml` / `__init__.py` / `scripts/Package.ps1` | 版本更新 0.3.0，源码包纳入原生实现并排除私人数据。 |
-| `README.md` / `PROGRESS.md` / `TODO.md` / 新文档 | 更新实际状态、使用方法与覆盖边界。 |
+| `README.md` / 新文档 | 更新实际状态、使用方法与覆盖边界。 |
 
 各函数见 [FUNCTIONS_NATIVE.md](FUNCTIONS_NATIVE.md)。MinHook 保留许可证及上游信息；没有修改系统防护或钉钉安装文件。
