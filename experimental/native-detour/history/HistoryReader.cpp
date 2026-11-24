@@ -6,7 +6,6 @@
 #include <charconv>
 #include <chrono>
 #include <condition_variable>
-#include <cstring>
 #include <deque>
 #include <functional>
 #include <filesystem>
@@ -32,13 +31,6 @@ using Query = void (__fastcall *)(void*, const std::string&, int, std::int64_t, 
 static_assert(sizeof(std::string)==32 && sizeof(Fields)==16 && sizeof(Rows)==24 && sizeof(Success)==64,
               "Requires the release MSVC x64 STL ABI");
 constexpr std::size_t kMaxFrame=512*1024, kMaxValue=128*1024, kMaxBatch=8*1024*1024;
-
-// Check a selected entry signature, without requiring a whole-client file hash.
-bool Matches(std::uintptr_t address,const unsigned char* expected,std::size_t length) noexcept {
-    unsigned char bytes[32]{};
-    return length<=sizeof(bytes) && payload::detail::safe_read(reinterpret_cast<void*>(address),bytes,length)
-        && std::memcmp(bytes,expected,length)==0;
-}
 
 // Return a field without inserting new keys into a borrowed native map.
 std::string Field(const Fields& row,const char* name) {
@@ -176,8 +168,7 @@ void Delay(void* context,Active active,unsigned milliseconds) noexcept {
 
 // Only follow the proven current-user pointer, vtable and two scalar fields; no credentials are read.
 bool ReadAccountUid(std::uintptr_t base,const AccountLayout& layout,std::int64_t& uid) noexcept {
-    if(!Matches(base+layout.initialized.rva,layout.initialized.bytes.data(),layout.initialized.bytes.size()) ||
-       !Matches(base+layout.uid_getter.rva,layout.uid_getter.bytes.data(),layout.uid_getter.bytes.size())) return false;
+    if(!MatchesImageEntry(base,layout.initialized) || !MatchesImageEntry(base,layout.uid_getter)) return false;
     std::uintptr_t object=0,vtable=0;unsigned char ready=0;uid=0;
     return payload::detail::safe_read(reinterpret_cast<void*>(base+layout.singleton),&object,sizeof(object)) && object>1
         && payload::detail::safe_read(reinterpret_cast<void*>(object),&vtable,sizeof(vtable)) && vtable==base+layout.vtable
@@ -189,11 +180,9 @@ bool ReadAccountUid(std::uintptr_t base,const AccountLayout& layout,std::int64_t
 void DownloadMedia(std::uintptr_t base,const ClientLayout& layout,const std::string& cid,std::int64_t mid,
                    const std::filesystem::path& target,const std::filesystem::path& failure,std::int64_t account,
                    std::int64_t timestamp,void* context,Active active) {
-    constexpr unsigned char service_entry[]={0x48,0x89,0x5c,0x24,0x10,0x48,0x89,0x6c,0x24,0x18,0x48,0x89,0x74,0x24,0x20,0x57,0x48,0x83,0xec,0x70,0x48,0x8b,0x05,0x3d,0x6b,0x51,0x06,0x48,0x33,0xc4,0x48,0x89};
-    constexpr unsigned char message_entry[]={0x40,0x55,0x53,0x56,0x57,0x41,0x54,0x41,0x55,0x41,0x56,0x41,0x57,0x48,0x8d,0xac,0x24,0x38,0xfe,0xff,0xff,0x48,0x81,0xec,0xc8,0x02,0x00,0x00,0x48,0x8b,0x05,0x15};
-    constexpr unsigned char media_entry[]={0x48,0x89,0x5c,0x24,0x08,0x55,0x56,0x57,0x41,0x54,0x41,0x55,0x41,0x56,0x41,0x57,0x48,0x8d,0xac,0x24,0x80,0xf5,0xff,0xff,0x48,0x81,0xec,0x80,0x0b,0x00,0x00,0x48};
-    if(!Matches(base+0x36ff5c0,service_entry,32)||!Matches(base+0x3759fe0,message_entry,32)||!Matches(base+0x3afa340,media_entry,32))
-        throw std::runtime_error("media_layout_unsupported");
+    const auto& entries=layout.attachments;
+    if(!MatchesImageEntry(base,entries.media_service) || !MatchesImageEntry(base,entries.media_message) ||
+       !MatchesImageEntry(base,entries.media_download)) throw AttachmentLayoutError::Media;
     using Shared=std::shared_ptr<void>;
     struct OpaqueError {unsigned char unused;};
     using MediaSuccess=std::function<void(const Shared&,const std::string&,const std::string&)>;
@@ -204,44 +193,66 @@ void DownloadMedia(std::uintptr_t base,const ClientLayout& layout,const std::str
     using Download=void (__fastcall *)(void*,Shared,bool,const std::string&,const MediaSuccess&,const MediaFailure&);
     static_assert(sizeof(Shared)==16 && sizeof(MediaSuccess)==64 && sizeof(MediaFailure)==64,"MSVC release callback ABI");
     Shared service,conversation,message;
-    reinterpret_cast<GetService>(base+0x36ff5c0)(&service);
+    reinterpret_cast<GetService>(base+entries.media_service.rva)(&service);
     if(!service)throw std::runtime_error("service_unavailable");
-    auto table=*reinterpret_cast<void***>(service.get());
-    reinterpret_cast<GetConversation>(table[0x680/sizeof(void*)])(service.get(),&conversation,cid);
-    if(conversation)reinterpret_cast<GetMessage>(base+0x3759fe0)(conversation.get(),&message,cid,mid);
+    // Follow the versioned conversation slot only within the selected image and its code pages.
+    const auto lookup=[&] {
+        std::uintptr_t table=0,lookup_entry=0;
+        if(!payload::detail::safe_read(service.get(),&table,sizeof(table))) throw AttachmentLayoutError::Media;
+        const auto slot=table+entries.media_conversation_slot;
+        if(!ImageContains(base,slot,sizeof(lookup_entry)) ||
+           !payload::detail::safe_read(reinterpret_cast<const void*>(slot),&lookup_entry,sizeof(lookup_entry)) ||
+           !ImageContains(base,lookup_entry,1,true)) throw AttachmentLayoutError::Media;
+        conversation.reset();
+        reinterpret_cast<GetConversation>(lookup_entry)(service.get(),&conversation,cid);
+        if(conversation)
+            reinterpret_cast<GetMessage>(base+entries.media_message.rva)(conversation.get(),&message,cid,mid);
+    };
+    lookup();
     if(!message) {
         // Historical queries also populate the client's message cache for an older media request.
-        auto page=Page(base,layout.history,cid,timestamp>0?timestamp+1:0,context,active);
+        if(!MatchesImageEntry(base,layout.history.query)) throw AttachmentLayoutError::Media;
+        const auto cursor=timestamp>0 && timestamp<std::numeric_limits<std::int64_t>::max()?timestamp+1:timestamp;
+        auto page=Page(base,layout.history,cid,cursor>0?cursor:0,context,active);
         std::int64_t current=0;
-        if(page->failed||!ReadAccountUid(base,layout.account,current)||current!=account)throw std::runtime_error("message_query_failed");
-        conversation.reset();
-        reinterpret_cast<GetConversation>(table[0x680/sizeof(void*)])(service.get(),&conversation,cid);
-        if(conversation)reinterpret_cast<GetMessage>(base+0x3759fe0)(conversation.get(),&message,cid,mid);
+        if(!active(context)||page->failed||!ReadAccountUid(base,layout.account,current)||current!=account)
+            throw std::runtime_error("message_query_failed");
+        lookup();
     }
     if(!message)throw std::runtime_error("message_unavailable");
     MediaFailure failed=[failure](const OpaqueError&) {
         try {std::ofstream result(failure);result<<"media_download_failed\n";}catch(...){}
     };
-    MediaSuccess succeeded=[base,account_layout=&layout.account,account,target,failed](const Shared&,const std::string&,const std::string& path) {
+    MediaSuccess succeeded=[base,account_layout=layout.account,account,target,failed](const Shared&,const std::string&,const std::string& path) {
         // Validate the same account again before publishing the downloaded file.
         try {
             std::int64_t current=0;
-            if(!ReadAccountUid(base,*account_layout,current)||current!=account)throw std::runtime_error("account_changed");
+            if(!ReadAccountUid(base,account_layout,current)||current!=account)throw std::runtime_error("account_changed");
             const auto source=std::filesystem::u8path(path);
             if(!source.is_absolute()||!std::filesystem::is_regular_file(source))throw std::runtime_error("media_path_invalid");
             std::filesystem::copy_file(source,target,std::filesystem::copy_options::overwrite_existing);
         } catch(...) {OpaqueError error{};failed(error);}
     };
     // The client maps false to the original-media variant (1), true to the preview variant (2).
-    reinterpret_cast<Download>(base+0x3afa340)(service.get(),message,false,std::string{},succeeded,failed);
+    reinterpret_cast<Download>(base+entries.media_download.rva)(service.get(),message,false,std::string{},succeeded,failed);
 }
 
-// Publish the fixed error through the private request transport, then remove the serviced request.
-void RejectUnsupportedRequest(const std::filesystem::path& request,const std::filesystem::path& outcome) {
+// Atomically publish one of the fixed compatibility errors before removing the serviced request.
+void RejectUnsupportedRequest(const std::filesystem::path& request,const std::filesystem::path& outcome,
+                              AttachmentLayoutError category) {
+    const char* code;
+    switch(category) {
+        case AttachmentLayoutError::Document: code="attachment_document_layout_unsupported"; break;
+        case AttachmentLayoutError::Media: code="attachment_media_layout_unsupported"; break;
+        case AttachmentLayoutError::InlineMedia: code="attachment_inline_media_layout_unsupported"; break;
+        case AttachmentLayoutError::CloudFile: code="attachment_cloud_file_layout_unsupported"; break;
+        case AttachmentLayoutError::GroupFiles: code="group_files_layout_unsupported"; break;
+        default: return;
+    }
     auto partial=outcome;
     partial+=L".partial";
     std::ofstream stream(partial,std::ios::binary|std::ios::trunc);
-    stream<<"layout_unsupported\n";
+    stream<<code<<'\n';
     stream.close();
     std::error_code error;
     if(stream) {
@@ -254,11 +265,10 @@ void RejectUnsupportedRequest(const std::filesystem::path& request,const std::fi
     std::filesystem::remove(partial,error);
 }
 
-// Dispatch verified legacy file operations, or promptly complete requests for an unsupported attachment layout.
+// Check the current account and dispatch each request using only its operation's layout.
 void DownloadRequests(std::uintptr_t base,const ClientLayout& layout,const BootstrapRequest& request,
                       std::int64_t account,void* context,Active active) noexcept {
     if(!request.attachment_request_directory[0])return;
-    constexpr unsigned char entry[]={0x48,0x89,0x5c,0x24,0x18,0x55,0x56,0x57,0x41,0x56,0x41,0x57,0x48,0x8d,0xac,0x24,0x20,0xfc,0xff,0xff,0x48,0x81,0xec,0xe0,0x04,0x00,0x00,0x48,0x8b,0x05,0x66,0x45};
     using JsonRead=void* (__fastcall *)(void*,const void*);
     using Binding=void (__fastcall *)(const std::string&,const void*);
     struct StringPiece {const char* data;std::size_t length;};
@@ -266,6 +276,7 @@ void DownloadRequests(std::uintptr_t base,const ClientLayout& layout,const Boots
         const std::filesystem::path directory(request.attachment_request_directory);
         if(!directory.is_absolute()||!std::filesystem::is_directory(directory))return;
         for(const auto& item:std::filesystem::directory_iterator(directory)) {
+            if(!active(context))break;
             if(item.path().extension()!=L".request"||!item.is_regular_file())continue;
             auto outcome=item.path();outcome.replace_extension(L".error");
             void* value=nullptr;
@@ -275,42 +286,44 @@ void DownloadRequests(std::uintptr_t base,const ClientLayout& layout,const Boots
                 std::string uid,json;std::getline(source,uid);std::getline(source,json);
                 std::int64_t current=0;
                 if(Integer(uid)!=account||!ReadAccountUid(base,layout.account,current)||current!=account)throw std::runtime_error("account_changed");
-                if(!layout.legacy_attachment_entries) {
-                    source.close();
-                    RejectUnsupportedRequest(item.path(),outcome);
-                    continue;
-                }
                 if(json=="group-space" || json=="list-directory") {
                     std::string body; std::getline(source,body);
                     auto result=item.path(); result.replace_extension(L".result");
-                    QueryFiles(base,json,body,result,outcome,account);
+                    QueryFiles(base,layout,json,body,result,outcome,account);
                 } else if(json=="cloud-file") {
                     std::string cid,space,file,path; std::getline(source,cid);std::getline(source,space);std::getline(source,file);std::getline(source,path);
                     const auto target=std::filesystem::u8path(path);
                     if(cid.empty()||space.empty()||file.empty()||!target.is_absolute())throw std::runtime_error("cloud_file_request_invalid");
-                    DownloadCloudFile(base,cid,space,file,target,outcome,account);
+                    DownloadCloudFile(base,layout,cid,space,file,target,outcome,account);
                 } else if(json=="inline-media") {
                     std::string media,path; std::getline(source,media); std::getline(source,path);
                     const auto target=std::filesystem::u8path(path);
                     if(!target.is_absolute())throw std::runtime_error("media_path_invalid");
-                    DownloadInlineImage(base,media,target,outcome,account);
+                    DownloadInlineImage(base,layout,media,target,outcome,account);
                 } else if(json=="media") {
                     std::string cid,mid,path,timestamp;std::getline(source,cid);std::getline(source,mid);std::getline(source,path);std::getline(source,timestamp);
                     const auto target=std::filesystem::u8path(path);
                     if(cid.empty()||Integer(mid)<=0||!target.is_absolute())throw std::runtime_error("media_request_invalid");
                     DownloadMedia(base,layout,cid,Integer(mid),target,outcome,account,Integer(timestamp),context,active);
                 } else {
-                    if(!Matches(base+0x61b1b90,entry,sizeof(entry)))throw std::runtime_error("layout_unsupported");
+                    const auto& document=layout.attachments.document;
+                    if(!MatchesImageEntry(base,document)) throw AttachmentLayoutError::Document;
                     HMODULE module=GetModuleHandleW(L"dtfbase.dll");
-                    auto read=reinterpret_cast<JsonRead>(GetProcAddress(module,"?Read@JSONReader@base@@SA?AV?$scoped_ptr@VValue@base@@U?$default_delete@VValue@base@@@std@@@@AEBV?$BasicStringPiece@V?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@2@@Z"));
-                    if(!read||json.empty())throw std::runtime_error("json_reader_unavailable");
+                    auto read=reinterpret_cast<JsonRead>(module ? GetProcAddress(module,"?Read@JSONReader@base@@SA?AV?$scoped_ptr@VValue@base@@U?$default_delete@VValue@base@@@std@@@@AEBV?$BasicStringPiece@V?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@2@@Z") : nullptr);
+                    if(!read || !ImageContains(reinterpret_cast<std::uintptr_t>(module),
+                                              reinterpret_cast<std::uintptr_t>(read),1,true))
+                        throw AttachmentLayoutError::Document;
+                    if(json.empty())throw std::runtime_error("json_reader_unavailable");
                     StringPiece piece{json.data(),json.size()};read(&value,&piece);
                     if(!value)throw std::runtime_error("request_invalid");
                     const std::string callback="dingtalkbridge_attachment_"+item.path().stem().string();
-                    reinterpret_cast<Binding>(base+0x61b1b90)(callback,value);
+                    reinterpret_cast<Binding>(base+document.rva)(callback,value);
                 }
                 source.close();
                 outcome.replace_extension(L".started");
+            } catch(AttachmentLayoutError category) {
+                RejectUnsupportedRequest(item.path(),outcome,category);
+                continue;
             } catch(...) {}
             if(value) {
                 auto table=*reinterpret_cast<void***>(value);
@@ -322,26 +335,30 @@ void DownloadRequests(std::uintptr_t base,const ClientLayout& layout,const Boots
     } catch(...) {}
 }
 
-// Verify all history entries, then round-robin one page per conversation on this worker.
+// Poll attachments independently of history compatibility and round-robin supported history pages.
 void Run(std::uintptr_t base,const ClientLayout& layout,const BootstrapRequest& request,SharedState* state,
          void* context,Active active,Emit emit) noexcept {
     InterlockedExchange(&state->history_running,1);
     try {
-        if(!MatchesImageEntry(base,layout.history.latest) || !MatchesImageEntry(base,layout.history.query) ||
-           !MatchesImageEntry(base,layout.history.destroy)) {
-            InterlockedExchange(&state->history_stage,1);
-            InterlockedExchange(&state->history_running,0);return;
-        }
+        const bool history_supported=MatchesImageEntry(base,layout.history.latest) &&
+            MatchesImageEntry(base,layout.history.query) && MatchesImageEntry(base,layout.history.destroy);
+        if(!history_supported) InterlockedExchange(&state->history_stage,1);
         std::int64_t account=0;
-        while(active(context) && !ReadAccountUid(base,layout.account,account)) {
-            InterlockedExchange(&state->history_stage,2);Delay(context,active,1000);
+        const bool service_requests=request.attachment_request_directory[0]!=0;
+        while(active(context) && (history_supported || service_requests) && !ReadAccountUid(base,layout.account,account)) {
+            if(history_supported) InterlockedExchange(&state->history_stage,2);
+            Delay(context,active,1000);
         }
         std::map<std::string,std::string> completed;
-        while(active(context)) {
+        while(active(context) && (history_supported || service_requests)) {
             std::int64_t current=0;
             if(!ReadAccountUid(base,layout.account,current)||current!=account) {InterlockedExchange(&state->history_stage,7);break;}
-            InterlockedExchange(&state->history_stage,3);
+            if(history_supported) InterlockedExchange(&state->history_stage,3);
             DownloadRequests(base,layout,request,account,context,active);
+            if(!history_supported) {
+                Delay(context,active,200);
+                continue;
+            }
             auto conversations=Conversations(base,layout.history,context,active);
             InterlockedExchange64(&state->history_conversations,static_cast<LONG64>(conversations.size()));
             struct Scan {
@@ -400,7 +417,8 @@ void Run(std::uintptr_t base,const ClientLayout& layout,const BootstrapRequest& 
                 Delay(context,active,200);
             }
         }
-        if(InterlockedCompareExchange(&state->history_stage,0,0)!=7) InterlockedExchange(&state->history_stage,8);
+        if(history_supported && InterlockedCompareExchange(&state->history_stage,0,0)!=7)
+            InterlockedExchange(&state->history_stage,8);
     } catch(...) {
         InterlockedIncrement64(&state->history_errors);
         if(InterlockedCompareExchange(&state->history_stage,0,0)!=7)InterlockedExchange(&state->history_stage,6);

@@ -3,8 +3,6 @@
 #include "HistoryReader.h"
 #include "../payload/safe_read.h"
 #include <array>
-#include <algorithm>
-#include <cstring>
 #include <cstdlib>
 #include <fstream>
 #include <functional>
@@ -19,11 +17,14 @@ using Shared = std::shared_ptr<void>;
 using Setter = void (__fastcall *)(void*, const std::string&);
 using Instance = void* (__fastcall *)();
 using DeletingDestructor = void* (__fastcall *)(void*, unsigned);
+using ResponseBody = const std::string& (__fastcall *)(void*);
 constexpr std::size_t kResponseLimit = 4 * 1024 * 1024;
 struct RpcTarget {
     std::uintptr_t base;
+    AccountLayout account_layout;
     std::int64_t account;
     std::filesystem::path result, failure;
+    ResponseBody response_body;
     bool finished = false;
 };
 std::mutex rpc_mutex;
@@ -32,20 +33,13 @@ std::array<void*, 8> context_table{};
 std::once_flag context_table_once;
 DeletingDestructor original_context_destructor = nullptr;
 
-// Resolve a named SDK export and fail before invoking an unsupported client layout.
-template<class Function> Function Export(const char* name) {
-    auto address = GetProcAddress(GetModuleHandleW(L"libgaea.dll"), name);
-    if (!address) throw std::runtime_error("file_sdk_unavailable");
+// Require each named SDK export to resolve within the loaded SDK image.
+template<class Function>
+Function Export(std::uintptr_t sdk, const char* name, AttachmentLayoutError category, bool executable = true) {
+    auto address = sdk ? GetProcAddress(reinterpret_cast<HMODULE>(sdk), name) : nullptr;
+    if (!address || !ImageContains(sdk, reinterpret_cast<std::uintptr_t>(address), 1, executable))
+        throw category;
     return reinterpret_cast<Function>(address);
-}
-
-// Verify the exact small entry points whose object offsets this integration depends on.
-void CheckEntry(std::uintptr_t address, const unsigned char* expected, std::size_t length) {
-    std::array<unsigned char, 32> actual{};
-    if (length > actual.size() || !dingtalkbridge::native::payload::detail::safe_read(
-            reinterpret_cast<void*>(address), actual.data(), length) ||
-            std::memcmp(actual.data(), expected, length) != 0)
-        throw std::runtime_error("file_layout_unsupported");
 }
 
 // Persist only a fixed diagnostic, keeping native response details inside the private transport.
@@ -63,10 +57,9 @@ void RpcSuccess(void* context, Shared, Shared response) noexcept {
     target.finished = true;
     try {
         std::int64_t current = 0;
-        if (!response || !ReadAccountUid(target.base, kClient905.account, current) || current != target.account)
+        if (!response || !ReadAccountUid(target.base, target.account_layout, current) || current != target.account)
             throw std::runtime_error("account_changed");
-        using Body = const std::string& (__fastcall *)(void*);
-        const auto& bytes = Export<Body>("?body@Message@lwp@gaea@@QEAAAEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@XZ")(response.get());
+        const auto& bytes = target.response_body(response.get());
         if (bytes.empty() || bytes.size() > kResponseLimit) throw std::runtime_error("response_size");
         auto partial = target.result; partial += L".partial";
         std::ofstream stream(partial, std::ios::binary | std::ios::trunc);
@@ -144,7 +137,8 @@ std::string UrlDecode(const std::string& input) {
 }
 
 // Keep request construction, dispatch and account authentication inside the existing SDK.
-void QueryFiles(std::uintptr_t base, const std::string& operation, const std::string& body_hex,
+void QueryFiles(std::uintptr_t base, const ClientLayout& layout,
+                const std::string& operation, const std::string& body_hex,
                 const std::filesystem::path& result, const std::filesystem::path& failure,
                 std::int64_t account) {
     const std::string endpoint = operation == "group-space" ? "/r/Adaptor/CSpace/getConversationSpace" :
@@ -154,19 +148,35 @@ void QueryFiles(std::uintptr_t base, const std::string& operation, const std::st
     using Constructor = void* (__fastcall *)(void*);
     using RequestConstructor = void* (__fastcall *)(void*, std::string);
     using Wrap = Shared* (__fastcall *)(Shared*, void*);
+    using Header = void (__fastcall *)(void*, const std::string&, const std::string&);
     using Send = void (__fastcall *)(void*, Shared, Shared);
-    constexpr unsigned char wrap_entry[] = {0x48,0x89,0x5c,0x24,0x18,0x55,0x56,0x57,0x48,0x83,0xec,0x20,0x48,0x8b,0xfa,0x48};
     // This helper initializes the SDK context's enable_shared_from_this weak reference.
-    CheckEntry(base + 0x54ed5d0, wrap_entry, sizeof(wrap_entry));
-    auto construct_context = Export<Constructor>("??0RequestContext@lwp@wukong@@QEAA@XZ");
-    auto native_table = Export<void**>("??_7RequestContext@lwp@wukong@@6B@");
-    constexpr unsigned char context_entry[] = {0x48,0x89,0x4c,0x24,0x08,0x53,0x48,0x83,0xec,0x20,0x48,0x8b,0xd9,0x33,0xc0,0x48,
-        0x89,0x81,0xb0,0x02,0x00,0x00,0x48,0x89,0x81,0xb8,0x02,0x00,0x00,0xe8,0x9e,0xca};
-    CheckEntry(reinterpret_cast<std::uintptr_t>(construct_context), context_entry, sizeof(context_entry));
-    std::call_once(context_table_once, [native_table] {
+    const auto& wrap = layout.attachments.group_files_wrap;
+    constexpr auto category = AttachmentLayoutError::GroupFiles;
+    if (!MatchesImageEntry(base, wrap)) throw category;
+    const auto sdk = reinterpret_cast<std::uintptr_t>(GetModuleHandleW(L"libgaea.dll"));
+    const auto construct_context = Export<Constructor>(sdk, "??0RequestContext@lwp@wukong@@QEAA@XZ", category);
+    const auto native_table = Export<void**>(sdk, "??_7RequestContext@lwp@wukong@@6B@", category, false);
+    const FunctionEntry<32> context_entry{reinterpret_cast<std::uintptr_t>(construct_context) - sdk,
+        {0x48,0x89,0x4c,0x24,0x08,0x53,0x48,0x83,0xec,0x20,0x48,0x8b,0xd9,0x33,0xc0,0x48,
+         0x89,0x81,0xb0,0x02,0x00,0x00,0x48,0x89,0x81,0xb8,0x02,0x00,0x00,0xe8,0x9e,0xca}};
+    decltype(context_table) native_slots{};
+    const auto table_start = reinterpret_cast<std::uintptr_t>(native_table) - sizeof(void*);
+    if (!MatchesImageEntry(sdk, context_entry) || !ImageContains(sdk, table_start, sizeof(native_slots)) ||
+        !dingtalkbridge::native::payload::detail::safe_read(
+            reinterpret_cast<const void*>(table_start), native_slots.data(), sizeof(native_slots)) ||
+        !ImageContains(sdk, reinterpret_cast<std::uintptr_t>(native_slots[1]), 1, true))
+        throw category;
+    const auto construct_request = Export<RequestConstructor>(sdk, "??0Request@lwp@wukong@@QEAA@V?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z", category);
+    const auto set_header = Export<Header>(sdk, "?setHeader@Message@lwp@gaea@@QEAAXAEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@0@Z", category);
+    const auto set_body = Export<Setter>(sdk, "?set_body@Message@lwp@gaea@@QEAAXAEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z", category);
+    const auto response_body = Export<ResponseBody>(sdk, "?body@Message@lwp@gaea@@QEAAAEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@XZ", category);
+    const auto agent_instance = Export<Instance>(sdk, "?instance@UserAgent@lwp@wukong@@SAPEAV123@XZ", category);
+    const auto send = Export<Send>(sdk, "?sendRequest@UserAgent@lwp@wukong@@QEAAXV?$shared_ptr@VRequest@lwp@wukong@@@std@@V?$shared_ptr@VRequestContext@lwp@wukong@@@5@@Z", category);
+    std::call_once(context_table_once, [&native_slots] {
         // Preserve native RTTI and all SDK adapter slots, overriding only terminal callbacks.
-        std::copy_n(native_table - 1, context_table.size(), context_table.begin());
-        original_context_destructor = reinterpret_cast<DeletingDestructor>(native_table[0]);
+        context_table = native_slots;
+        original_context_destructor = reinterpret_cast<DeletingDestructor>(native_slots[1]);
         context_table[1] = reinterpret_cast<void*>(&DestroyContext);
         context_table[5] = reinterpret_cast<void*>(&RpcSuccess);
         context_table[6] = reinterpret_cast<void*>(&RpcSuccess);
@@ -175,44 +185,44 @@ void QueryFiles(std::uintptr_t base, const std::string& operation, const std::st
     void* raw_context = ::operator new(0x2c0);
     construct_context(raw_context);
     Shared context;
-    reinterpret_cast<Wrap>(base + 0x54ed5d0)(&context, raw_context);
+    reinterpret_cast<Wrap>(base + wrap.rva)(&context, raw_context);
     {
         std::lock_guard<std::mutex> lock(rpc_mutex);
-        rpc_targets.emplace(raw_context, RpcTarget{base, account, result, failure});
+        rpc_targets.emplace(raw_context, RpcTarget{base, layout.account, account, result, failure, response_body});
         *reinterpret_cast<void***>(raw_context) = context_table.data() + 1;
     }
     void* raw_request = ::operator new(0x80);
-    Export<RequestConstructor>("??0Request@lwp@wukong@@QEAA@V?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z")(raw_request, endpoint);
+    construct_request(raw_request, endpoint);
     auto request = Own(raw_request);
-    using Header = void (__fastcall *)(void*, const std::string&, const std::string&);
-    Export<Header>("?setHeader@Message@lwp@gaea@@QEAAXAEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@0@Z")(raw_request, "dt", "p");
-    Export<Setter>("?set_body@Message@lwp@gaea@@QEAAXAEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z")(raw_request, body);
-    auto agent = Export<Instance>("?instance@UserAgent@lwp@wukong@@SAPEAV123@XZ")();
-    Export<Send>("?sendRequest@UserAgent@lwp@wukong@@QEAAXV?$shared_ptr@VRequest@lwp@wukong@@@std@@V?$shared_ptr@VRequestContext@lwp@wukong@@@5@@Z")(agent, std::move(request), std::move(context));
+    set_header(raw_request, "dt", "p");
+    set_body(raw_request, body);
+    auto agent = agent_instance();
+    send(agent, std::move(request), std::move(context));
 }
 
 // Reuse the client's authorization-aware media URL builder and asynchronous file service.
-void DownloadInlineImage(std::uintptr_t base, const std::string& media,
+void DownloadInlineImage(std::uintptr_t base, const ClientLayout& layout, const std::string& media,
                          const std::filesystem::path& target, const std::filesystem::path& failure,
                          std::int64_t account) {
     if (media.empty() || media.size() > 4096 || (media[0] != '$' && media[0] != '@'))
         throw std::runtime_error("inline_media_invalid");
-    constexpr unsigned char url_entry[] = {0x48,0x89,0x5c,0x24,0x18,0x55,0x56,0x57,0x41,0x56,0x41,0x57,0x48,0x8d,0xac,0x24};
-    CheckEntry(base + 0x36aee10, url_entry, sizeof(url_entry));
+    constexpr auto category = AttachmentLayoutError::InlineMedia;
+    const auto& entry = media[0] == '$' ? layout.attachments.inline_auth_url : layout.attachments.inline_url;
+    if (!MatchesImageEntry(base, entry)) throw category;
+    const auto sdk = reinterpret_cast<std::uintptr_t>(GetModuleHandleW(L"libgaea.dll"));
     std::string url;
     if (media[0] == '$') {
         using MakeAuthUrl = std::string* (__fastcall *)(std::string*, const std::string&, int, bool, bool);
-        constexpr unsigned char auth_entry[] = {0x48,0x89,0x5c,0x24,0x18,0x55,0x56,0x57,0x41,0x54,0x41,0x55,0x41,0x56,0x41,0x57};
-        CheckEntry(base + 0x36aa880, auth_entry, sizeof(auth_entry));
-        reinterpret_cast<MakeAuthUrl>(base + 0x36aa880)(&url, media, 1, false, false);
+        reinterpret_cast<MakeAuthUrl>(base + entry.rva)(&url, media, 1, false, false);
     } else {
         using MakeUrl = std::string* (__fastcall *)(std::string*, const std::string&, int, bool, bool, bool, int, const std::string&);
-        reinterpret_cast<MakeUrl>(base + 0x36aee10)(&url, media, 1, false, false, false, 100, "im");
+        reinterpret_cast<MakeUrl>(base + entry.rva)(&url, media, 1, false, false, false, 100, "im");
     }
     if (url.rfind("https://", 0) != 0) throw std::runtime_error("inline_media_url_unavailable");
     using Constructor = void* (__fastcall *)(void*);
+    const auto construct_task = Export<Constructor>(sdk, "??0FileDownloadTask@file@wukong@@QEAA@XZ", category);
     void* raw = ::operator new(0x118);
-    Export<Constructor>("??0FileDownloadTask@file@wukong@@QEAA@XZ")(raw);
+    construct_task(raw);
     auto task = Own(raw);
     const auto question = url.find('?');
     std::map<std::string, std::string> auth;
@@ -227,15 +237,15 @@ void DownloadInlineImage(std::uintptr_t base, const std::string& media,
             position = end + 1;
         }
     }
-    Export<Setter>("?setMediaId@FileDownloadTask@file@wukong@@QEAAXAEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z")(raw, url.substr(0, question));
+    Export<Setter>(sdk, "?setMediaId@FileDownloadTask@file@wukong@@QEAAXAEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z", category)(raw, url.substr(0, question));
     using SetAuth = void (__fastcall *)(void*, const std::map<std::string, std::string>&);
-    Export<SetAuth>("?set_auth_info@FileDownloadTask@lwp@gaea@@QEAAXAEBV?$map@V?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@V12@U?$less@V?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@2@V?$allocator@U?$pair@$$CBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@V12@@std@@@2@@std@@@Z")(raw, auth);
+    Export<SetAuth>(sdk, "?set_auth_info@FileDownloadTask@lwp@gaea@@QEAAXAEBV?$map@V?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@V12@U?$less@V?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@2@V?$allocator@U?$pair@$$CBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@V12@@std@@@2@@std@@@Z", category)(raw, auth);
     const auto biz = auth.find("auth_bizType");
-    if (biz != auth.end()) Export<Setter>("?set_biz_type@FileDownloadTask@lwp@gaea@@QEAAXAEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z")(raw, biz->second);
+    if (biz != auth.end()) Export<Setter>(sdk, "?set_biz_type@FileDownloadTask@lwp@gaea@@QEAAXAEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z", category)(raw, biz->second);
     using Flag = void (__fastcall *)(void*, bool);
-    Export<Flag>("?set_enable_http_download@FileDownloadTask@lwp@gaea@@QEAAX_N@Z")(raw, true);
+    Export<Flag>(sdk, "?set_enable_http_download@FileDownloadTask@lwp@gaea@@QEAAX_N@Z", category)(raw, true);
     auto partial = target; partial += L".partial";
-    Export<Setter>("?set_path@FileDownloadTask@lwp@gaea@@QEAAXAEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z")(raw, partial.u8string());
+    Export<Setter>(sdk, "?set_path@FileDownloadTask@lwp@gaea@@QEAAXAEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z", category)(raw, partial.u8string());
     struct Opaque {};
     using Start = std::function<void()>;
     using Callback = std::function<void(const Opaque&)>;
@@ -243,27 +253,27 @@ void DownloadInlineImage(std::uintptr_t base, const std::string& media,
     Start started = [] { /* The private destination is published only after completion. */ };
     Callback progress = [](const Opaque&) { /* Progress remains inside the native transfer service. */ };
     Callback failed = [failure](const Opaque&) { Fail(failure); };
-    Callback succeeded = [base, account, partial, target, failure](const Opaque&) {
+    Callback succeeded = [base, account_layout = layout.account, account, partial, target, failure](const Opaque&) {
         // Validate the account again before publishing bytes from the asynchronous SDK callback.
         try {
             std::int64_t current = 0;
-            if (!ReadAccountUid(base, kClient905.account, current) || current != account) throw std::runtime_error("account_changed");
+            if (!ReadAccountUid(base, account_layout, current) || current != account) throw std::runtime_error("account_changed");
             std::filesystem::copy_file(partial, target, std::filesystem::copy_options::overwrite_existing);
             std::filesystem::remove(partial);
         } catch (...) { Fail(failure); }
     };
-    auto service = Export<Instance>("?instance@FileService@file@wukong@@SAPEAV123@XZ")();
-    Export<Download>("?download@FileService@file@wukong@@QEAAXV?$shared_ptr@VFileDownloadTask@file@wukong@@@std@@V?$function@$$A6AXXZ@5@V?$function@$$A6AXAEBVFileProgress@lwp@gaea@@@Z@5@V?$function@$$A6AXAEBVFileDownloadResult@lwp@gaea@@@Z@5@V?$function@$$A6AXAEBVErrorResult@wukong@@@Z@5@@Z")(service, std::move(task), std::move(started), std::move(progress), std::move(succeeded), std::move(failed));
+    const auto service_instance = Export<Instance>(sdk, "?instance@FileService@file@wukong@@SAPEAV123@XZ", category);
+    const auto download = Export<Download>(sdk, "?download@FileService@file@wukong@@QEAAXV?$shared_ptr@VFileDownloadTask@file@wukong@@@std@@V?$function@$$A6AXXZ@5@V?$function@$$A6AXAEBVFileProgress@lwp@gaea@@@Z@5@V?$function@$$A6AXAEBVFileDownloadResult@lwp@gaea@@@Z@5@V?$function@$$A6AXAEBVErrorResult@wukong@@@Z@5@@Z", category);
+    download(service_instance(), std::move(task), std::move(started), std::move(progress), std::move(succeeded), std::move(failed));
 }
 
 // Use the same space/file download manager as the client's group-file interface.
-void DownloadCloudFile(std::uintptr_t base, const std::string& cid, const std::string& space,
+void DownloadCloudFile(std::uintptr_t base, const ClientLayout& layout, const std::string& cid, const std::string& space,
                        const std::string& file, const std::filesystem::path& target,
                        const std::filesystem::path& failure, std::int64_t account) {
-    constexpr unsigned char download_entry[] = {0x40,0x55,0x53,0x56,0x57,0x41,0x54,0x41,0x55,0x41,0x56,0x41,0x57,0x48,0x8d,0xac};
-    constexpr unsigned char manager_entry[] = {0x48,0x89,0x5c,0x24,0x18,0x57,0x48,0x83,0xec,0x20,0x48,0x8b,0x05,0xef,0xa9,0x9d};
-    CheckEntry(base + 0x581dea0, download_entry, sizeof(download_entry));
-    CheckEntry(base + 0x581e740, manager_entry, sizeof(manager_entry));
+    const auto& entries = layout.attachments;
+    if (!MatchesImageEntry(base, entries.cloud_download) || !MatchesImageEntry(base, entries.cloud_manager))
+        throw AttachmentLayoutError::CloudFile;
     struct Context {
         int kind = 1, operation = 2;
         std::string cid, sid, scene, action;
@@ -277,11 +287,11 @@ void DownloadCloudFile(std::uintptr_t base, const std::string& cid, const std::s
                                           const Success&, const Failure&, const Failure&, const Context&);
     Context context; context.cid = cid;
     auto partial = target; partial += L".partial";
-    Success succeeded = [base, account, target, partial, failure](const std::int64_t&, const Opaque& result) {
+    Success succeeded = [base, account_layout = layout.account, account, target, partial, failure](const std::int64_t&, const Opaque& result) {
         // A cache hit may return an existing SDK path, so copy the bounded result path after account validation.
         try {
             std::int64_t current = 0;
-            if (!ReadAccountUid(base, kClient905.account, current) || current != account) throw std::runtime_error("account_changed");
+            if (!ReadAccountUid(base, account_layout, current) || current != account) throw std::runtime_error("account_changed");
             auto source = partial;
             if (!std::filesystem::is_regular_file(source) || std::filesystem::file_size(source) == 0) {
                 const auto& path = *reinterpret_cast<const std::string*>(reinterpret_cast<const char*>(&result) + 0x28);
@@ -295,8 +305,8 @@ void DownloadCloudFile(std::uintptr_t base, const std::string& cid, const std::s
     // Keep failures and progress within the private file transport.
     Failure failed = [failure](const Opaque&) { Fail(failure); };
     Failure progress = [](const Opaque&) {};
-    auto manager = reinterpret_cast<Instance>(base + 0x581e740)();
-    reinterpret_cast<Download>(base + 0x581dea0)(manager, space, file, partial.u8string(), -1,
+    auto manager = reinterpret_cast<Instance>(base + entries.cloud_manager.rva)();
+    reinterpret_cast<Download>(base + entries.cloud_download.rva)(manager, space, file, partial.u8string(), -1,
                                                  std::string{}, 0, false, succeeded, failed, progress, context);
 }
 }

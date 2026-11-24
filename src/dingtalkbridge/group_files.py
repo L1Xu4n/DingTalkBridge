@@ -13,7 +13,10 @@ import uuid
 from typing import Any
 
 from .attachment_cache import cache_lock
-from .attachments import Attachment, AttachmentError, _directory, _object, _positive_int, _require_collector, _text
+from .attachments import (
+    Attachment, AttachmentError, _directory, _native_request_error, _object, _positive_int,
+    _require_collector, _text,
+)
 from .store import Store
 
 
@@ -46,7 +49,7 @@ def _write_json(path: Path, value: Any) -> None:
 
 
 def _rpc(store: Store, operation: str, payload: bytes) -> Any:
-    """Submit a bounded native read, reuse pending requests and cache completed metadata briefly."""
+    """Reuse pending native reads, report safe failures and cache completed metadata briefly."""
     try:
         import msgpack
     except ImportError:
@@ -74,7 +77,7 @@ def _rpc(store: Store, operation: str, payload: bytes) -> Any:
             result, failed = pending.with_suffix(".result"), pending.with_suffix(".error")
             if failed.exists():
                 state.unlink(missing_ok=True)
-                raise AttachmentError("group_files_native_request_failed_check_native_version_and_access")
+                raise _native_request_error(failed, group_files=True)
             if not result.exists() and not pending.exists() and not pending.with_suffix(".started").exists():
                 text = account + "\n" + operation + "\n" + payload.hex() + "\n"
                 if len(text.encode()) > 32768:
@@ -87,7 +90,7 @@ def _rpc(store: Store, operation: str, payload: bytes) -> Any:
             while not result.exists():
                 if failed.exists():
                     state.unlink(missing_ok=True)
-                    raise AttachmentError("group_files_native_request_failed_check_native_version_and_access")
+                    raise _native_request_error(failed, group_files=True)
                 if time.monotonic() >= deadline:
                     raise AttachmentError("group_files_query_pending_retry_same_request")
                 time.sleep(.1)

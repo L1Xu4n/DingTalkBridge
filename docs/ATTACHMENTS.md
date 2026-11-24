@@ -1,6 +1,6 @@
 # 附件内容读取
 
-通过 `list_attachments` 找到消息中的图片、文件和目录，用 `read_attachment` 读取内容。`list_group_files` 提供群钉盘根目录和子目录查询。当前版本为 0.6.4。
+通过 `list_attachments` 找到消息中的图片、文件和目录，用 `read_attachment` 读取内容。`list_group_files` 提供群钉盘根目录和子目录查询。0.6.5 支持钉钉 `9.0.10.261117008` 的按需下载和群钉盘查询。
 
 实机已验证普通受保护图片、PDF、PPTX、XLSX、本地 Word，以及 1793×105 的卡片内嵌原图、群根目录分页、目录中的两个 Word 文件。更新原生组件前完整退出钉钉，包括托盘进程，重新打开后重连 MCP。
 
@@ -34,6 +34,8 @@
 `bridge_status.collector.running=false` 时查看 `failure_reason`、`native_controller_counts.error` 和 `requires_client_restart`。返回 `attachment_collector_requires_DingTalk_restart` 时完整退出并重开钉钉，常驻 worker 会自动恢复；`attachment_collector_waiting_open_DingTalk` 表示正在等待客户端窗口。其它暂时不可用状态可稍后重试 `read_attachment`。`graceful_stop=true` 描述 Controller 退出结果。
 
 `availability=download_required` 表示尚需获取字节，`download_on_read=true` 表示调用 `read_attachment` 会由 MCP 下载。AI 直接调用读取工具，MCP 在当前账号下完成下载和解析，再返回图片内容块、文字、单元格或原文件资源。下载地址保留在 MCP 内部。下载尚在进行时按返回提示重试同一个读取请求。
+
+客户端接口变动时，工具按操作返回 `attachment_document_layout_unsupported`、`attachment_media_layout_unsupported`、`attachment_inline_media_layout_unsupported`、`attachment_cloud_file_layout_unsupported` 或 `group_files_layout_unsupported`。这类错误需适配客户端后重新构建原生组件。附件与历史补采各自核验接口，普通图片在需要补查原消息时还会核验分页查询接口。
 
 默认 `view=auto` 返回图片图像、PDF 页面文字和图像、DOCX / PPTX 的结构化内容与嵌入图片，以及 Excel 工作表结构和单元格。DOC / PPT 先转为 PDF。`view=image` 可读取 Office 页面图像，需要安装对应 Microsoft Office 应用。`view=text` 只取文字，扫描页会给出视觉读取或 OCR 提示。
 
@@ -124,6 +126,7 @@ MCP 在工具结果、JSON-RPC 响应和 stdio 输出中使用相同的大小边
 | `_download` | 按配置的网络 I/O 超时将媒体流式写入临时文件，返回可读的失败原因。 |
 | `_download_complete` | 检查客户端是否已完成并关闭目标文件。 |
 | `_client_download` | 提交当前账号的媒体或文件下载请求，按配置等待目标文件，拒绝预览图并支持后续重试。 |
+| `_native_request_error` | 读取有大小限制的原生错误记录，仅返回约定的布局错误码。 |
 | `_require_collector` | 统一检查普通附件和群文件的采集就绪状态，区分钉钉重启、等待窗口和暂时不可用。 |
 | `cached_file` / `fetch` | 校验缓存哈希及图片尺寸，自动下载完整字节后原子更新内容文件与清单；占位地址回退到客户端下载。 |
 | `list_attachments` / `read_attachment` | 提供工具入口，返回附件状态或实际内容；读取时锁定缓存并刷新保留时间。 |
@@ -145,8 +148,10 @@ MCP 在工具结果、JSON-RPC 响应和 stdio 输出中使用相同的大小边
 | `attachment_readers.read` | 按格式和视图选择读取器，并支持原文件资源返回。 |
 | `mcp._response_limit` / `MCPServer.call_tool` / `serve` | 执行工具，统一媒体和文本的传输上限；服务器运行期间管理缓存清理线程。 |
 | `mcp.tool_definitions` / `validate_arguments` / `MCPServer.handle` | 声明参数、校验视图与范围、完成协议握手与调用分发。 |
-| `HistoryReader.DownloadMedia` / `DownloadRequests` / `Run` | 使用当前账号的消息和媒体服务下载附件，在持续采集中处理私有下载请求。 |
-| `NativeFiles.Export` / `CheckEntry` | 解析客户端 SDK 符号并检查依赖的入口布局。 |
+| `ClientLayout.ImageContains` / `MatchesImageEntry` | 校验地址属于已加载模块，并核对可执行页与对应版本的入口签名。 |
+| `HistoryReader.DownloadMedia` / 内部 `lookup` | 按版本核验媒体接口与会话查询位置，然后通过当前账号读取原图。 |
+| `RejectUnsupportedRequest` / `DownloadRequests` / `Run` | 写入固定布局错误，按操作分发下载，并持续处理附件请求及可用的历史查询。 |
+| `NativeFiles.Export` | 解析客户端 SDK 符号，并检查其地址位于已加载 SDK 的预期内存页。 |
 | `Fail` / `RpcSuccess` / `RpcFailure` | 写入固定失败状态，或在账号复核后原子保存有大小上限的查询结果。 |
 | `DestroyContext` / `Own` | 清理异步回调状态，使用 SDK 的析构路径释放原生对象。 |
 | `Unhex` / `UrlDecode` | 解码私有查询载荷及 SDK 生成的媒体参数。 |
@@ -155,7 +160,7 @@ MCP 在工具结果、JSON-RPC 响应和 stdio 输出中使用相同的大小边
 | `DownloadCloudFile` | 使用钉盘下载管理器取得群文件，兼容 SDK 已有的下载缓存。 |
 | `native_controller.run_collect` / `Controller.Run` / `RequestStringsValid` | 将私有请求目录传给原生层，并校验协议字符串边界。 |
 | `config.Config.__post_init__` / `load_config` | 加载并校验下载目录、缓存天数及下载超时，将环境变量和用户目录转换为实际路径。 |
-| `native_controller.default_controller_path` | 选择包含初始化重试及准确错误码的 0.6.4 原生组件。 |
+| `native_controller.default_controller_path` | 选择包含 9.0.10 附件入口校验的 0.6.5 原生组件。 |
 
 ## 验证范围
 

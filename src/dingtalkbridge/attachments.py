@@ -20,6 +20,13 @@ from .attachment_cache import cache_lock
 
 MAX_DOWNLOAD_BYTES = 512 * 1024 * 1024
 MEDIA_HOSTS = {"down.dingtalk.com", "down-cdn.dingtalk.com", "static.dingtalk.com"}
+_NATIVE_ERROR_BYTES = 128
+_ATTACHMENT_LAYOUT_ERRORS = {
+    "attachment_document_layout_unsupported",
+    "attachment_media_layout_unsupported",
+    "attachment_inline_media_layout_unsupported",
+    "attachment_cloud_file_layout_unsupported",
+}
 
 
 class AttachmentError(ValueError):
@@ -332,8 +339,30 @@ def _require_collector(store: Store) -> None:
         raise AttachmentError("attachment_collector_unavailable_check_bridge_status_retry_read_attachment")
 
 
+def _native_request_error(path: Path, *, group_files: bool = False) -> AttachmentError:
+    """Read a bounded native outcome and expose only layout codes for the requested tool."""
+    fallback = ("group_files_native_request_failed_check_native_version_and_access" if group_files
+                else "attachment_native_download_failed_check_access_and_native_version")
+    try:
+        with path.open("rb") as source:
+            raw = source.read(_NATIVE_ERROR_BYTES + 1)
+        if len(raw) > _NATIVE_ERROR_BYTES:
+            return AttachmentError(fallback)
+        code = raw.decode("ascii").rstrip("\r\n")
+    except (OSError, UnicodeError):
+        return AttachmentError(fallback)
+    if group_files:
+        if code in {"layout_unsupported", "group_files_layout_unsupported"}:
+            return AttachmentError("group_files_layout_unsupported")
+    elif code == "layout_unsupported":
+        return AttachmentError("attachment_layout_unsupported")
+    elif code in _ATTACHMENT_LAYOUT_ERRORS:
+        return AttachmentError(code)
+    return AttachmentError(fallback)
+
+
 def _client_download(store: Store, attachment: Attachment, destination: Path) -> None:
-    """Wait the configured time for a client download, retaining its request for continuation."""
+    """Wait for client downloads and report safe outcomes while retaining pending requests."""
     account = store.native_account_id()
     if not (attachment.media_id or attachment.file_id and attachment.space_id) or not account or account != attachment.account_id:
         raise AttachmentError("attachment_requires_client_download")
@@ -380,7 +409,7 @@ def _client_download(store: Store, attachment: Attachment, destination: Path) ->
         deadline = time.monotonic() + timeout
         while not _download_complete(downloaded):
             if failed.exists():
-                raise AttachmentError("attachment_native_download_failed_check_access_and_native_version")
+                raise _native_request_error(failed)
             if time.monotonic() >= deadline:
                 raise AttachmentError("attachment_download_pending_retry_read_attachment")
             time.sleep(0.25)

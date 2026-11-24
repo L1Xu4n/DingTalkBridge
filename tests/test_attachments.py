@@ -372,6 +372,51 @@ class AttachmentTests(unittest.TestCase):
             result = self.read(attachment, view="text")
         self.assertEqual(result["structuredContent"]["parts"][0]["text"], content.decode())
 
+    def test_native_layout_errors_are_safely_reported_by_both_tools(self):
+        """Report old and new native layout codes, and hide other synthetic error contents."""
+        self.store.bind_native_account("12345")
+        body = {"attachments": [{"extension": json.dumps({
+            "f_id": "fixture-file", "s_id": "fixture-space", "f_name": "fixture.txt"})}]}
+        self.store.ingest({"id": "layout-message", "conversation_id": "fixture", "text": json.dumps(body),
+                           "timestamp": datetime.now(timezone.utc).isoformat(), "source": "windows_native_history",
+                           "metadata": {"content_type": "501", "account_id": "12345", "native_message_id": "101"}})
+        listed = self.server.call_tool("list_attachments", {"message_id": "layout-message"})
+        attachment_id = listed["structuredContent"]["attachments"][0]["attachment_id"]
+        requests = self.config.data_dir / "native-attachment-requests"
+        attachment_fallback = "attachment_native_download_failed_check_access_and_native_version"
+        group_fallback = "group_files_native_request_failed_check_native_version_and_access"
+        cases = (
+            ("read_attachment", {"attachment_id": attachment_id}, (
+                (b"layout_unsupported\n", "attachment_layout_unsupported"),
+                (b"attachment_document_layout_unsupported\n", "attachment_document_layout_unsupported"),
+                (b"attachment_media_layout_unsupported\r\n", "attachment_media_layout_unsupported"),
+                (b"attachment_inline_media_layout_unsupported", "attachment_inline_media_layout_unsupported"),
+                (b"attachment_cloud_file_layout_unsupported\n", "attachment_cloud_file_layout_unsupported"),
+                (b"group_files_layout_unsupported\n", attachment_fallback),
+                (b"attachment_document_layout_unsupported" + b"\n" * 128 + b"fixture private detail", attachment_fallback),
+            )),
+            ("list_group_files", {"conversation_id": "fixture"}, (
+                (b"layout_unsupported\r\n", "group_files_layout_unsupported"),
+                (b"group_files_layout_unsupported\n", "group_files_layout_unsupported"),
+                (b"fixture private detail", group_fallback),
+                (b"", group_fallback),
+            )),
+        )
+
+        def reject_request(_seconds):
+            """Model a synchronous native rejection which consumes the request without starting it."""
+            pending, = requests.glob("*.request")
+            pending.with_suffix(".error").write_bytes(diagnostic)
+            pending.unlink()
+
+        with patch.object(self.store, "_collector_status", return_value={"running": True}), \
+             patch("time.sleep", side_effect=reject_request):
+            for tool, arguments, diagnostics in cases:
+                for diagnostic, expected in diagnostics:
+                    with self.subTest(tool=tool, expected=expected):
+                        result = self.server.call_tool(tool, arguments)
+                        self.assertEqual(result, {"isError": True, "content": [{"type": "text", "text": expected}]})
+
 
 if __name__ == "__main__":
     unittest.main()
